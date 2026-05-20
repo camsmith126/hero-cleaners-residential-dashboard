@@ -1095,8 +1095,37 @@ button.action.subtle:hover { background: var(--accent-soft); }
     }
     saveLocal(LS_KEY_CONVERSIONS, ls);
     showToast('Reason saved (local; will sync in next phase)');
-    // Re-render the target table in place so the row's pill state stays in sync
-    renderTargetCustomers(applyOverridesToCustomers());
+    // Re-render every view that surfaces this reason: Target Customers on
+    // Operations + the One-Off table and distribution panel on Past Customers.
+    const customers = applyOverridesToCustomers();
+    renderTargetCustomers(customers);
+    renderPast();
+  };
+
+  // ----- Cancellation-reason inline-save (used by the Former Recurring table) -----
+  // Modal-form save (__saveCancellationFromModal) writes all 3 fields; this
+  // inline path writes ONLY the reason, preserving any existing win_back and
+  // note values the modal may have set.
+  window.__setCancelReason = function (cid, value) {
+    const ls = loadLocal(LS_KEY_CANCELS);
+    const existing = ls[cid] || {};
+    if (value) {
+      ls[cid] = {
+        ...existing,
+        customer_id: cid,
+        reason: value,
+        set_at: new Date().toISOString(),
+        set_by: existing.set_by || 'jaylee',
+      };
+    } else if (existing.win_back_potential || existing.note) {
+      // Other fields set — keep the entry, just null out reason
+      ls[cid] = { ...existing, reason: null, set_at: new Date().toISOString() };
+    } else {
+      delete ls[cid];
+    }
+    saveLocal(LS_KEY_CANCELS, ls);
+    showToast('Cancellation reason saved (local; will sync in next phase)');
+    renderPast();
   };
 
   function renderTargetCustomers(customers) {
@@ -1661,15 +1690,19 @@ button.action.subtle:hover { background: var(--accent-soft); }
        'Visits', 'Last Visit', 'Peak Cadence', 'Reason'],
       winBack.map(c => [c, c.ltv, c.visits_total, fmtDate(c.last_visit), c.frequency || '—', cancellationReason(c.customer_id) || '—']));
 
-    // Former Recurring full list — now with Cancellation Reason column.
-    // Same data the modal's Cancellation form writes to.
+    // Former Recurring full list — inline-editable Cancel Reason dropdown
+    // (mirrors the Target Customers UX so Jaylee can tag without opening a modal).
     gridIn('formerRecTable',
       [{ name: 'Customer', formatter: c => clickableCustomer(c) },
        'Lifespan', 'Peak Cadence', 'First Rec', 'Last Rec',
        { name: 'LTV', formatter: v => fmt$(v) },
        { name: 'Cancel Reason', formatter: cid => {
-           const r = mergedCancellations()[cid];
-           return r && r.reason ? r.reason : gridjs.html('<span class="txt-muted" style="font-size:12px">— untagged —</span>');
+           const cancels = mergedCancellations();
+           const current = (cancels[cid] && cancels[cid].reason) || '';
+           const opts = ['', ...CANCELLATION_REASONS].map(r =>
+             `<option value="${escapeHtml(r)}"${r === current ? ' selected' : ''}>${r ? escapeHtml(r) : '— select reason —'}</option>`
+           ).join('');
+           return gridjs.html(`<select class="conv-reason ${current ? 'is-set' : ''}" onchange="window.__setCancelReason('${escapeHtml(cid)}', this.value)">${opts}</select>`);
          } }],
       formerRecurring.sort((a, b) => (b.ltv || 0) - (a.ltv || 0))
         .map(c => [c, (c.recurring_lifespan_days || 0) + 'd', c.frequency || '—',
@@ -1678,14 +1711,18 @@ button.action.subtle:hover { background: var(--accent-soft); }
     // Cancellation Reason distribution panel — aggregate across former recurring
     renderCancellationReasonsDistribution(formerRecurring);
 
-    // One-off — now with Conversion Reason column (mirrored from Target Customers)
+    // One-off — inline-editable Conversion Reason dropdown (matches Target
+    // Customers UX) so Jaylee can tag without opening the modal.
     gridIn('oneOffTable',
       [{ name: 'Customer', formatter: c => clickableCustomer(c) },
        'Visits', 'Last Visit',
        { name: 'LTV', formatter: v => fmt$(v) },
        { name: 'Conversion Reason', formatter: cid => {
-           const r = getConversionReason(cid);
-           return r ? r : gridjs.html('<span class="txt-muted" style="font-size:12px">— untagged —</span>');
+           const current = getConversionReason(cid);
+           const opts = ['', ...CONVERSION_REASONS].map(r =>
+             `<option value="${escapeHtml(r)}"${r === current ? ' selected' : ''}>${r ? escapeHtml(r) : '— select reason —'}</option>`
+           ).join('');
+           return gridjs.html(`<select class="conv-reason ${current ? 'is-set' : ''}" onchange="window.__setConversion('${escapeHtml(cid)}', this.value)">${opts}</select>`);
          } }],
       oneOff.sort((a, b) => (b.ltv || 0) - (a.ltv || 0))
         .map(c => [c, c.visits_total, fmtDate(c.last_visit), c.ltv, c.customer_id]));
