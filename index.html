@@ -147,11 +147,43 @@ button.action.subtle:hover { background: var(--accent-soft); }
 }
 .target-table .conv-pill.converted    { background: var(--accent-soft); color: var(--accent); }
 .target-table .conv-pill.unconverted  { background: var(--warn-soft);   color: var(--warn); }
-.target-table .conv-reason {
-  font-size: 12px; padding: 5px 8px; border: 1px solid var(--border);
-  border-radius: 5px; background: var(--card); width: 100%; max-width: 240px;
+
+/* ---- Sleek dropdown styling — global ------------------------------ */
+/* Native <select> elements get a polished, rounded, centered look with a
+   custom chevron. Used by the inline reason dropdowns across the dashboard
+   AND by the modal form selects. */
+select, .conv-reason {
+  -webkit-appearance: none; -moz-appearance: none; appearance: none;
+  background-color: var(--card);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236b6b6b' d='M2 4.5l4 4 4-4' stroke='%236b6b6b' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 12px 12px;
+  border: 1px solid var(--border); border-radius: 999px;
+  padding: 7px 30px 7px 14px;
+  font: inherit; font-size: 13px;
+  color: var(--text);
+  text-align: center; text-align-last: center;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
 }
-.target-table .conv-reason.is-set { border-color: var(--info); background: var(--info-soft); }
+select:hover, .conv-reason:hover {
+  border-color: var(--accent);
+}
+select:focus, .conv-reason:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+select option { text-align: left; }
+.target-table .conv-reason {
+  font-size: 12px; width: 100%; max-width: 240px;
+}
+.target-table .conv-reason.is-set {
+  border-color: var(--info); background-color: var(--info-soft); color: var(--info); font-weight: 600;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath stroke='%231b5e8a' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round' fill='none' d='M2 4.5l4 4 4-4'/%3E%3C/svg%3E");
+}
+/* When a reason dropdown lives inside a Grid.js cell, center it nicely. */
+.gridjs-td .conv-reason { display: block; margin: 0 auto; }
 .target-table .conv-converted-cell { color: var(--muted); font-size: 12px; }
 .roster-flow {
   display: grid; grid-template-columns: 1fr 1fr 1fr;
@@ -260,9 +292,16 @@ button.action.subtle:hover { background: var(--accent-soft); }
 .modal-section h3 { margin: 0 0 8px 0; font-size: 12px; text-transform: uppercase; color: var(--muted); }
 .form-row { display: grid; grid-template-columns: 120px 1fr; gap: 8px; margin-bottom: 8px; align-items: center; }
 .form-row label { font-size: 12px; color: var(--muted); }
-.form-row select, .form-row input, .form-row textarea {
-  width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 5px; font: inherit; font-size: 13px;
+.form-row input, .form-row textarea {
+  width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; font: inherit; font-size: 13px;
+  background: var(--card); color: var(--text);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
+.form-row input:focus, .form-row textarea:focus {
+  outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
+}
+/* form-row selects inherit the global pill style — keep width consistent. */
+.form-row select { width: 100%; }
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
 .visit-list { font-size: 12px; max-height: 200px; overflow-y: auto; padding-left: 0; list-style: none; }
 .visit-list li { padding: 4px 0; border-bottom: 1px dashed var(--border); display: flex; justify-content: space-between; gap: 8px; }
@@ -273,10 +312,118 @@ button.action.subtle:hover { background: var(--accent-soft); }
   font-size: 13px; opacity: 0; transition: opacity 0.2s; pointer-events: none; z-index: 2000;
 }
 .toast.show { opacity: 1; }
-.gridjs-wrapper { box-shadow: none !important; }
+.gridjs-wrapper { box-shadow: none !important; overflow-x: auto; }
 .gridjs-table { font-size: 13px; }
 .gridjs-th { font-weight: 600 !important; font-size: 11px !important; text-transform: uppercase !important; color: var(--muted) !important; background: var(--bg) !important; }
 .gridjs-td { padding: 8px 10px !important; }
+
+/* =====================================================================
+   Mobile (≤ 768px) — phone-friendly layout
+   ===================================================================== */
+@media (max-width: 768px) {
+  body { font-size: 14px; }
+  main { padding: 12px; }
+
+  /* Topbar wraps cleanly when title + meta can't share one row */
+  .topbar { padding: 10px 14px; flex-wrap: wrap; gap: 4px 12px; }
+  .topbar h1 { font-size: 16px; }
+  .topbar .meta { font-size: 11px; width: 100%; }
+
+  /* Tabs scroll horizontally instead of wrapping */
+  .tabnav { padding: 0 12px; overflow-x: auto; -webkit-overflow-scrolling: touch; flex-wrap: nowrap; scrollbar-width: none; }
+  .tabnav::-webkit-scrollbar { display: none; }
+  .tabnav button { padding: 12px 14px; font-size: 13px; white-space: nowrap; flex-shrink: 0; }
+
+  /* KPI strip — 2 columns on phone */
+  .kpi-strip { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .kpi { padding: 10px 12px; }
+  .kpi .label { font-size: 10px; }
+  .kpi .value { font-size: 19px; }
+  .kpi .sub { font-size: 10px; }
+
+  /* Cards are tighter */
+  .card { padding: 12px 14px; margin-bottom: 14px; border-radius: 10px; }
+  .card h2 { font-size: 14px; margin-bottom: 10px; }
+  .card h3 { font-size: 12px; }
+
+  /* Roster flow tiles stack */
+  .roster-flow { grid-template-columns: 1fr; gap: 8px; }
+  .flow-tile { padding: 12px 14px; }
+  .flow-tile .flow-value { font-size: 26px; }
+
+  /* New Jobs feed — 2-row layout per row */
+  .new-job-row {
+    grid-template-columns: 24px 1fr auto;
+    grid-template-rows: auto auto;
+    grid-template-areas:
+      "icon name amount"
+      "icon meta meta";
+    row-gap: 2px; column-gap: 10px;
+    padding: 10px 12px;
+  }
+  .new-job-row .status-icon { grid-area: icon; }
+  .new-job-row .new-job-customer { grid-area: name; font-size: 13px; }
+  .new-job-row .new-job-amount { grid-area: amount; font-size: 12px; }
+  .new-job-row .new-job-date,
+  .new-job-row .new-job-type,
+  .new-job-row .new-job-cleaners {
+    grid-area: meta; display: inline; font-size: 11px; margin-right: 8px;
+  }
+  .new-job-row .new-job-date::after { content: " · "; color: var(--border); }
+  .new-job-row .new-job-type::after { content: " · "; color: var(--border); }
+
+  /* Distribution bars — label above, count to the right */
+  .conv-dist-row { grid-template-columns: 1fr 56px; row-gap: 4px; column-gap: 8px; }
+  .conv-dist-bar-wrap { grid-column: 1 / -1; }
+  .conv-dist-label { font-size: 12px; }
+
+  /* Modal */
+  .modal-bg { padding: 8px; }
+  .modal { padding: 18px; border-radius: 12px; }
+  .modal h2 { font-size: 17px; }
+  .modal-grid { grid-template-columns: 1fr 1fr; gap: 6px; }
+  .form-row { grid-template-columns: 1fr; gap: 4px; }
+  .form-row label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+
+  /* Conflict / expiring lists stack */
+  .conflict-row, .expiring-row { grid-template-columns: 1fr; gap: 4px; padding: 10px 0; }
+
+  /* Charts shorter so they fit two-per-screen */
+  .chart-wrap { height: 220px; }
+  .chart-wrap.short { height: 180px; }
+
+  /* Grid.js tables — tighter padding, horizontal scroll wrapper */
+  .gridjs-table { font-size: 12px !important; }
+  .gridjs-td { padding: 7px 9px !important; }
+  .gridjs-th { font-size: 10px !important; padding: 8px 9px !important; }
+
+  /* Bigger tap target for dropdowns on phone */
+  select, .conv-reason { padding: 10px 32px 10px 14px; font-size: 14px; min-height: 40px; }
+  .target-table .conv-reason { max-width: 100%; font-size: 13px; }
+
+  /* Simple/target tables shrink */
+  .simple-table, .target-table { font-size: 12px; }
+  .simple-table th, .simple-table td, .target-table th, .target-table td { padding: 7px 8px; }
+
+  /* Search box larger tap target */
+  .search-box { padding: 11px 14px; font-size: 14px; min-height: 42px; }
+
+  .review-link { padding: 6px 12px; font-size: 12px; }
+  button.action { padding: 10px 16px; font-size: 13px; min-height: 40px; }
+}
+
+/* =====================================================================
+   Phone-only (≤ 480px) — extra-narrow refinements
+   ===================================================================== */
+@media (max-width: 480px) {
+  main { padding: 10px; }
+  .topbar { padding: 9px 12px; }
+  .topbar h1 { font-size: 15px; }
+  .kpi-strip { gap: 6px; }
+  .kpi .value { font-size: 17px; }
+  .card { padding: 11px 12px; }
+  .modal { padding: 14px; }
+}
 </style>
 </head>
 <body>
