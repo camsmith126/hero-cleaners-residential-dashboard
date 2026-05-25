@@ -126,8 +126,18 @@ button.action.subtle:hover { background: var(--accent-soft); }
 .new-job-row.first-recurring .status-icon { color: var(--purple); }
 .badge.pill-first-recurring  { background: var(--purple-soft); color: var(--purple); }
 .new-job-row .new-job-date { color: var(--muted); font-size: 12px; }
-.new-job-row .new-job-customer { font-weight: 600; }
-.new-job-row .new-job-type { color: var(--muted); font-size: 12px; }
+.new-job-row .new-job-customer-cell {
+  display: flex; align-items: center; gap: 6px;
+  min-width: 0; overflow: hidden;
+}
+.new-job-row .new-job-customer {
+  font-weight: 600; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.new-job-row .new-job-type {
+  color: var(--muted); font-size: 12px;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .new-job-row .new-job-amount {
   font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12px;
   color: var(--muted); text-align: right; min-width: 60px;
@@ -362,7 +372,8 @@ select option { text-align: left; }
     padding: 10px 12px;
   }
   .new-job-row .status-icon { grid-area: icon; }
-  .new-job-row .new-job-customer { grid-area: name; font-size: 13px; }
+  .new-job-row .new-job-customer-cell { grid-area: name; min-width: 0; }
+  .new-job-row .new-job-customer { font-size: 13px; }
   .new-job-row .new-job-amount { grid-area: amount; font-size: 12px; }
   .new-job-row .new-job-date,
   .new-job-row .new-job-type,
@@ -1350,10 +1361,17 @@ select option { text-align: left; }
       if (firstRec)                       tag = ' <span class="badge pill-first-recurring" style="margin-left:4px">First Recurring</span>';
       else if (c.state === 'Brand New')   tag = ' <span class="badge state-Brand-New" style="margin-left:4px">Brand New</span>';
       const cleaners = j.cleaners || '';
+      // Customer name + optional badge live in a SINGLE grid cell. Wrapping
+      // them in one <span class="new-job-customer-cell"> keeps the column
+      // count at exactly 6 across every row regardless of whether the badge
+      // is present — otherwise the (sometimes-empty) badge span occupies its
+      // own grid slot and the job-type column drifts row-to-row.
       return `<div class="new-job-row ${rowClass}">
         <span class="status-icon">${icon}</span>
         <span class="new-job-date">${fmtDate(j.date)}</span>
-        <a href="#" data-customer="${escapeHtml(j.customer_id)}" onclick="window.__openCustomer(this); return false;" class="new-job-customer">${escapeHtml(name)}</a><span>${tag}</span>
+        <span class="new-job-customer-cell">
+          <a href="#" data-customer="${escapeHtml(j.customer_id)}" onclick="window.__openCustomer(this); return false;" class="new-job-customer">${escapeHtml(name)}</a>${tag}
+        </span>
         <span class="new-job-type">${escapeHtml(jobType)}</span>
         <span class="new-job-cleaners">${cleaners ? escapeHtml(cleaners) : '<span class="txt-muted" style="opacity:0.6">—</span>'}</span>
         <span class="new-job-amount">${amount}</span>
