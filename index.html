@@ -470,9 +470,20 @@ select option { text-align: left; }
     <div class="card" id="newJobsCard">
       <h2>New Jobs This Week <span class="txt-muted" id="newJobsCount"></span></h2>
       <p class="txt-muted" style="margin:-4px 0 12px 0;font-size:12px">
-        Jobs for customers who aren't on the active recurring roster — Brand New customers, one-off bookings, and returning past customers. These are the visits we want top of mind so we can make a great impression.
+        Visits this week for customers who aren't yet on the steady-state recurring roster. Split below into the standard new-customer book and the first-recurring milestones. Rows turn green ✓ as the visits complete.
       </p>
-      <div id="newJobsFeed" class="new-jobs-feed"></div>
+
+      <h3 style="margin:6px 0 8px 0">All New Jobs <span class="txt-muted" style="font-weight:400;font-size:12px" id="allNewJobsCount"></span></h3>
+      <p class="txt-muted" style="margin:0 0 8px 0;font-size:11px">
+        First-time cleans (Intro / Deep / Move-In / Move-Out) and returning past customers. These need to feel great so they want a recurring spot.
+      </p>
+      <div id="allNewJobsFeed" class="new-jobs-feed"></div>
+
+      <h3 style="margin:18px 0 4px 0">First Recurring Cleans <span style="color:var(--purple)">★</span> <span class="txt-muted" style="font-weight:400;font-size:12px" id="firstRecurringCount"></span></h3>
+      <p class="txt-muted" style="margin:0 0 8px 0;font-size:11px">
+        A customer just booked recurring — this is their first-ever visit at recurring cadence. Top priority: nailing this clean is what makes the recurring stick.
+      </p>
+      <div id="firstRecurringFeed" class="new-jobs-feed"></div>
     </div>
 
     <div class="card" id="targetCard">
@@ -1297,10 +1308,15 @@ select option { text-align: left; }
     return [iso(mon), iso(sun)];
   }
 
-  // "New Jobs This Week" — Brand New + non-recurring customers' visits this week.
-  // Includes both already-completed (✓) and upcoming (○) jobs so it reads as a
-  // mini pipeline: the same row turns from circle to checkmark once the daily
-  // run picks up the completion the morning after.
+  // "New Jobs This Week" — split into two sub-feeds:
+  //   • All New Jobs: first-time cleans (Intro/Deep/Move-In/Move-Out) +
+  //     returning past customers — the standard new-customer book.
+  //   • First Recurring Cleans: the customer's first-ever recurring visit
+  //     (they were a one-off / brand-new, now they've booked recurring) —
+  //     a milestone Jaylee should treat as priority.
+  // Completed visits in either feed render with the green ✓ + green
+  // background; upcoming first-recurring visits get the purple ★ + purple
+  // background so they pop as milestones.
   function renderNewJobsThisWeek(customers) {
     const [monIso, sunIso] = currentWeekIsoBounds();
     const byId = Object.fromEntries(customers.map(c => [c.customer_id, c]));
@@ -1310,21 +1326,24 @@ select option { text-align: left; }
       // Brand New, one-off only, returning past customers — the standard
       // "outside the steady-state roster" cases.
       if (c.state === 'Brand New' || !c.is_recurring) return true;
-      // ALSO: on the roster but hasn't had their first recurring visit yet
-      // (Cass-style — did a one-off, then booked recurring). Their upcoming
-      // first recurring visit is a milestone we want surfaced here.
+      // ALSO: on the roster but hasn't had their first recurring visit yet,
+      // OR the recorded first recurring visit is this week (caught completed
+      // in real-time before the customer record graduates them off this list).
       if (c.is_recurring && !c.first_rec_visit) return true;
+      if (c.is_recurring && c.first_rec_visit && c.first_rec_visit >= monIso && c.first_rec_visit <= sunIso) return true;
       return false;
     };
-    // A job is the customer's "first ever recurring" if: they haven't completed
-    // a recurring visit yet (first_rec_visit == null), this job's job_type IS
-    // a recurring cadence, and this job is their chronologically-next visit
-    // (matches c.next_scheduled) — so only the earliest qualifying job lights up,
-    // not later recurring visits the same week.
-    const isFirstRecurring = (j, c) => {
-      if (!c || !c.is_recurring || c.first_rec_visit) return false;
-      if (j.date !== c.next_scheduled) return false;
-      return RECURRING_JOB_TYPES.includes(j.job_type);
+    // A job is "first-ever recurring" if it's at recurring cadence AND
+    // either (a) it's the customer's next scheduled visit and they have no
+    // first_rec_visit yet (upcoming milestone), or (b) it IS the recorded
+    // first_rec_visit (already-completed milestone — caught between the
+    // completion and the customer record graduating them off this list).
+    const isFirstRecurringJob = (j, c) => {
+      if (!c || !c.is_recurring) return false;
+      if (!RECURRING_JOB_TYPES.includes(j.job_type)) return false;
+      if (c.first_rec_visit && j.date === c.first_rec_visit) return true;
+      if (!c.first_rec_visit && j.date === c.next_scheduled) return true;
+      return false;
     };
 
     const completed = (SNAPSHOT.completed_recent || [])
@@ -1346,34 +1365,44 @@ select option { text-align: left; }
     }
     all.sort((a, b) => a.date.localeCompare(b.date) || (a._status === 'completed' ? -1 : 1));
 
-    document.getElementById('newJobsCount').textContent =
-      all.length ? `(${all.length})` : '';
-
-    const feed = document.getElementById('newJobsFeed');
-    if (!all.length) {
-      feed.innerHTML = '<div class="txt-muted" style="padding:6px 2px">No new-customer jobs on the calendar this week.</div>';
-      return;
+    // Bucket into the two feeds. First-recurring rows live in their own
+    // feed regardless of completion status; everything else goes to the
+    // standard "All New Jobs" feed.
+    const firstRecRows = [];
+    const otherRows    = [];
+    for (const j of all) {
+      const c = byId[j.customer_id] || {};
+      if (isFirstRecurringJob(j, c)) firstRecRows.push(j);
+      else                            otherRows.push(j);
     }
 
-    feed.innerHTML = all.map(j => {
+    document.getElementById('newJobsCount').textContent =
+      all.length ? `(${all.length})` : '';
+    document.getElementById('allNewJobsCount').textContent =
+      otherRows.length ? `(${otherRows.length})` : '';
+    document.getElementById('firstRecurringCount').textContent =
+      firstRecRows.length ? `(${firstRecRows.length})` : '';
+
+    const renderRow = (j, opts) => {
       const c = byId[j.customer_id] || {};
       const done = j._status === 'completed';
-      const firstRec = !done && isFirstRecurring(j, c);
-      const icon = done ? '✓' : (firstRec ? '★' : '○');
-      const rowClass = firstRec ? 'first-recurring' : (done ? 'completed' : 'upcoming');
+      const isFirstRec = !!opts.firstRec;
+      // Completion always wins the visual: green ✓ + green bg. Upcoming
+      // first-recurring rows get the purple ★ milestone treatment. Plain
+      // upcoming rows get the blue ○ "upcoming" treatment.
+      const icon = done ? '✓' : (isFirstRec ? '★' : '○');
+      const rowClass = done ? 'completed' : (isFirstRec ? 'first-recurring' : 'upcoming');
       const name = j.display_name || c.display_name || '—';
       const jobType = displayJobType(j.job_type, c);
       const amount = done && j.revenue != null ? fmt$(j.revenue) : '';
-      // Tag: First Recurring wins over Brand New (more specific milestone).
+      // Tag: Brand New marker still useful in "All New Jobs" so Jaylee can
+      // distinguish brand-new from returning-past at a glance. First-recurring
+      // rows don't need a badge — the section header carries that meaning.
       let tag = '';
-      if (firstRec)                       tag = ' <span class="badge pill-first-recurring" style="margin-left:4px">First Recurring</span>';
-      else if (c.state === 'Brand New')   tag = ' <span class="badge state-Brand-New" style="margin-left:4px">Brand New</span>';
+      if (!isFirstRec && c.state === 'Brand New') {
+        tag = ' <span class="badge state-Brand-New" style="margin-left:4px">Brand New</span>';
+      }
       const cleaners = j.cleaners || '';
-      // Customer name + optional badge live in a SINGLE grid cell. Wrapping
-      // them in one <span class="new-job-customer-cell"> keeps the column
-      // count at exactly 6 across every row regardless of whether the badge
-      // is present — otherwise the (sometimes-empty) badge span occupies its
-      // own grid slot and the job-type column drifts row-to-row.
       return `<div class="new-job-row ${rowClass}">
         <span class="status-icon">${icon}</span>
         <span class="new-job-date">${fmtDate(j.date)}</span>
@@ -1384,7 +1413,16 @@ select option { text-align: left; }
         <span class="new-job-cleaners">${cleaners ? escapeHtml(cleaners) : '<span class="txt-muted" style="opacity:0.6">—</span>'}</span>
         <span class="new-job-amount">${amount}</span>
       </div>`;
-    }).join('');
+    };
+
+    const otherFeed   = document.getElementById('allNewJobsFeed');
+    const firstFeed   = document.getElementById('firstRecurringFeed');
+    otherFeed.innerHTML = otherRows.length
+      ? otherRows.map(j => renderRow(j, { firstRec: false })).join('')
+      : '<div class="txt-muted" style="padding:6px 2px">No new-customer jobs on the calendar this week.</div>';
+    firstFeed.innerHTML = firstRecRows.length
+      ? firstRecRows.map(j => renderRow(j, { firstRec: true })).join('')
+      : '<div class="txt-muted" style="padding:6px 2px">No first-recurring visits scheduled this week.</div>';
   }
 
   // ----- Phase 1 commercial sidecar ----------------------------------------
