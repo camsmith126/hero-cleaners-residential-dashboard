@@ -488,10 +488,7 @@ select option { text-align: left; }
 
     <div class="card" id="targetCard">
       <h2>Target Customers <span class="txt-muted" id="targetCount"></span></h2>
-      <p class="txt-muted" style="margin:-4px 0 4px 0;font-size:12px">
-        New-customer visits completed in the last 30 days. Customers who've signed up for recurring (any future visit at recurring cadence) are auto-marked Converted. For the rest, set a reason so we can see why they didn't convert. Conversion rate is computed against <strong>qualified</strong> targets only — move-out cleans are excluded as transient (the customer is leaving the property and can't realistically become recurring).
-      </p>
-      <div id="targetSummary" class="txt-muted" style="font-size:12px;margin-bottom:14px"></div>
+      <div id="targetSnapshot" class="kpi-strip" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));margin-bottom:16px"></div>
 
       <h3 style="margin:6px 0 8px 0">Qualified Targets <span class="txt-muted" style="font-weight:400;font-size:12px" id="qualifiedTargetCount"></span></h3>
       <div id="qualifiedTargetTableWrap"></div>
@@ -1572,18 +1569,23 @@ select option { text-align: left; }
     document.getElementById('targetCount').textContent =
       rows.length ? `(${rows.length})` : '';
 
-    const summaryEl = document.getElementById('targetSummary');
-    if (!rows.length) {
-      summaryEl.textContent = 'No new-customer visits in the last 30 days.';
-    } else {
-      const qPart = qualifiedRows.length
-        ? `Of ${qualifiedRows.length} qualified new-customer visit${qualifiedRows.length === 1 ? '' : 's'}, ${qualifiedConverted} signed up for recurring (${ratePct}% conversion).`
-        : 'No qualified targets right now.';
-      const nqPart = nonQualifiedRows.length
-        ? ` ${nonQualifiedRows.length} move-out clean${nonQualifiedRows.length === 1 ? ' is' : 's are'} excluded as transient.`
-        : '';
-      summaryEl.innerHTML = qPart + nqPart;
-    }
+    // Snapshot KPI strip — at-a-glance conversion funnel for the qualified
+    // 30-day window. Conversion Rate is the headline; the other tiles
+    // contextualize what's in the denominator.
+    const rateValue = ratePct == null
+      ? '—'
+      : `<span class="${ratePct >= 50 ? 'delta-up' : (ratePct >= 25 ? '' : 'delta-down')}">${ratePct}%</span>`;
+    const unconverted = qualifiedRows.length - qualifiedConverted;
+    renderKpiStrip('targetSnapshot', [
+      { label: 'Qualified Targets', value: qualifiedRows.length,
+        sub: 'new-customer visits, last 30d (excludes move-outs)' },
+      { label: 'Converted',         value: qualifiedConverted,
+        sub: 'booked recurring' },
+      { label: 'Conversion Rate',   value: rateValue,
+        sub: `${unconverted} unconverted` },
+      { label: 'Non-Qualified',     value: nonQualifiedRows.length,
+        sub: 'move-out cleans excluded' },
+    ]);
 
     // Per-section counts
     document.getElementById('qualifiedTargetCount').textContent =
