@@ -478,10 +478,18 @@ select option { text-align: left; }
     <div class="card" id="targetCard">
       <h2>Target Customers <span class="txt-muted" id="targetCount"></span></h2>
       <p class="txt-muted" style="margin:-4px 0 4px 0;font-size:12px">
-        New-customer visits completed in the last 30 days. Customers who've signed up for recurring (any future visit at recurring cadence) are auto-marked Converted. For the rest, set a reason so we can see why they didn't convert.
+        New-customer visits completed in the last 30 days. Customers who've signed up for recurring (any future visit at recurring cadence) are auto-marked Converted. For the rest, set a reason so we can see why they didn't convert. Conversion rate is computed against <strong>qualified</strong> targets only — move-out cleans are excluded as transient (the customer is leaving the property and can't realistically become recurring).
       </p>
-      <div id="targetSummary" class="txt-muted" style="font-size:12px;margin-bottom:10px"></div>
-      <div id="targetTableWrap"></div>
+      <div id="targetSummary" class="txt-muted" style="font-size:12px;margin-bottom:14px"></div>
+
+      <h3 style="margin:6px 0 8px 0">Qualified Targets <span class="txt-muted" style="font-weight:400;font-size:12px" id="qualifiedTargetCount"></span></h3>
+      <div id="qualifiedTargetTableWrap"></div>
+
+      <h3 style="margin:18px 0 4px 0">Non-Qualified Targets <span class="txt-muted" style="font-weight:400;font-size:12px" id="nonQualifiedTargetCount"></span></h3>
+      <p class="txt-muted" style="margin:0 0 8px 0;font-size:11px">
+        Customers Jaylee tagged as <em>Move-out clean (transient)</em>. Excluded from the qualified conversion rate above. To move a row back to Qualified, change the reason dropdown to anything other than Move-out.
+      </p>
+      <div id="nonQualifiedTargetTableWrap"></div>
     </div>
 
     <div class="card" id="expiringCard" style="display:none">
@@ -1509,21 +1517,44 @@ select option { text-align: left; }
       return b.visit.date.localeCompare(a.visit.date);
     });
 
-    const convertedCount = rows.filter(r => r.converted).length;
+    // Split into Qualified / Non-Qualified based on Jaylee's reason tag.
+    // Non-qualified = Move-out clean (transient). Converted customers can't
+    // land here because their reason cell is N/A — they're always qualified.
+    const MOVE_OUT_REASON = 'Move-out clean (transient)';
+    const isMoveOut = cid => getConversionReason(cid) === MOVE_OUT_REASON;
+    const qualifiedRows    = rows.filter(r => !isMoveOut(r.cid));
+    const nonQualifiedRows = rows.filter(r =>  isMoveOut(r.cid));
+
+    // Realistic conversion rate uses qualified rows only.
+    const qualifiedConverted = qualifiedRows.filter(r => r.converted).length;
+    const ratePct = qualifiedRows.length
+      ? Math.round((qualifiedConverted / qualifiedRows.length) * 100)
+      : null;
+
     document.getElementById('targetCount').textContent =
       rows.length ? `(${rows.length})` : '';
-    document.getElementById('targetSummary').textContent = rows.length
-      ? `Of ${rows.length} new-customer visit${rows.length === 1 ? '' : 's'} in the last 30 days, ${convertedCount} ${convertedCount === 1 ? 'has' : 'have'} signed up for recurring.`
-      : 'No new-customer visits in the last 30 days.';
 
-    const wrap = document.getElementById('targetTableWrap');
-    if (!rows.length) { wrap.innerHTML = ''; return; }
+    const summaryEl = document.getElementById('targetSummary');
+    if (!rows.length) {
+      summaryEl.textContent = 'No new-customer visits in the last 30 days.';
+    } else {
+      const qPart = qualifiedRows.length
+        ? `Of ${qualifiedRows.length} qualified new-customer visit${qualifiedRows.length === 1 ? '' : 's'}, ${qualifiedConverted} signed up for recurring (${ratePct}% conversion).`
+        : 'No qualified targets right now.';
+      const nqPart = nonQualifiedRows.length
+        ? ` ${nonQualifiedRows.length} move-out clean${nonQualifiedRows.length === 1 ? ' is' : 's are'} excluded as transient.`
+        : '';
+      summaryEl.innerHTML = qPart + nqPart;
+    }
 
-    const reasonOptions = ['', ...CONVERSION_REASONS]
-      .map(r => `<option value="${escapeHtml(r)}">${r ? escapeHtml(r) : '— select reason —'}</option>`)
-      .join('');
+    // Per-section counts
+    document.getElementById('qualifiedTargetCount').textContent =
+      qualifiedRows.length ? `(${qualifiedRows.length})` : '';
+    document.getElementById('nonQualifiedTargetCount').textContent =
+      nonQualifiedRows.length ? `(${nonQualifiedRows.length})` : '';
 
-    const tbody = rows.map(({ cid, visit, customer, converted }) => {
+    // Shared row-renderer so both sections look identical.
+    const renderRow = ({ cid, visit, customer, converted }) => {
       const name = customer.display_name || visit.display_name || '—';
       const daysAgoTxt = (() => {
         const n = daysAgo(visit.date);
@@ -1550,16 +1581,28 @@ select option { text-align: left; }
         <td>${statusCell}</td>
         <td>${reasonCell}</td>
       </tr>`;
-    }).join('');
+    };
 
-    wrap.innerHTML = `
-      <table class="target-table">
-        <thead><tr>
-          <th>Customer</th><th>Last Visit</th><th>Job Type</th>
-          <th>Cleaner(s)</th><th>Status</th><th>Reason if Not Converted</th>
-        </tr></thead>
-        <tbody>${tbody}</tbody>
-      </table>`;
+    const renderInto = (wrapId, rowSet, emptyMsg) => {
+      const wrap = document.getElementById(wrapId);
+      if (!rowSet.length) {
+        wrap.innerHTML = `<div class="txt-muted" style="padding:6px 2px;font-size:12px">${emptyMsg}</div>`;
+        return;
+      }
+      wrap.innerHTML = `
+        <table class="target-table">
+          <thead><tr>
+            <th>Customer</th><th>Last Visit</th><th>Job Type</th>
+            <th>Cleaner(s)</th><th>Status</th><th>Reason if Not Converted</th>
+          </tr></thead>
+          <tbody>${rowSet.map(renderRow).join('')}</tbody>
+        </table>`;
+    };
+
+    renderInto('qualifiedTargetTableWrap',    qualifiedRows,
+               'No qualified targets in the last 30 days.');
+    renderInto('nonQualifiedTargetTableWrap', nonQualifiedRows,
+               'No move-out cleans tagged yet. When Jaylee marks a job as Move-out via the Reason dropdown above, it moves here.');
   }
 
   // ============================================================
