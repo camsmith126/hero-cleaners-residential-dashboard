@@ -708,7 +708,7 @@ select option { text-align: left; }
     <div class="card">
       <h2>Conversion Attribution — 2026 YTD</h2>
       <p class="txt-muted" style="margin:-4px 0 10px 0;font-size:12px">
-        Per cleaner, year-to-date 2026: <strong>Qualified</strong> = first-time cleans (Intro / Deep / etc., excluding move-outs). <strong>Non-Qualified</strong> = move-out cleans only. <strong>Conversion Rate</strong> = qualified first-visit customers who became recurring ÷ qualified first-visit customers. Avg Δ Time is actual − scheduled minutes (positive = over) from the Daily Report's last 4 weeks.
+        Per cleaner, year-to-date 2026. <strong>Non-Qualified</strong> = customers Jaylee has tagged as <em>Move-out clean (transient)</em> via the dropdown in Target Customers or the One-Off table on Past Customers. <strong>Qualified</strong> = every other first-visit customer. <strong>Conversion Rate</strong> = qualified first-visit customers who became recurring ÷ qualified first-visit customers. Avg Δ Time is actual − scheduled minutes (positive = over) from the Daily Report's last 4 weeks.
       </p>
       <div id="cleanerYtd"></div>
     </div>
@@ -716,7 +716,7 @@ select option { text-align: left; }
     <div class="card">
       <h2>Per-Cleaner — Rolling 30 Days</h2>
       <p class="txt-muted" style="margin:-4px 0 10px 0;font-size:12px">
-        One card per cleaner. All counts are over the last 30 days of completed jobs (Daily Report + Analytics DB). Conversion Rate uses the same qualified-only denominator as the YTD section above.
+        One card per cleaner. All counts are over the last 30 days of completed jobs. Qualified / Non-Qualified uses Jaylee's <em>Move-out</em> tags the same way the YTD section above does.
       </p>
       <div id="cleanerCards30d" class="cleaner-cards"></div>
     </div>
@@ -1505,10 +1505,13 @@ select option { text-align: left; }
     }
     showToast('Reason saved (shared)');
     // Re-render every view that surfaces this reason: Target Customers on
-    // Operations + the One-Off table and distribution panel on Past Customers.
+    // Operations, the One-Off table and distribution panel on Past Customers,
+    // and Cleaner Performance (which uses the same tag to split qualified
+    // vs non-qualified attribution).
     const customers = applyOverridesToCustomers();
     renderTargetCustomers(customers);
     renderPast();
+    renderPerformance();
   };
 
   // ----- Cancellation-reason inline-save (used by the Former Recurring table) -----
@@ -2279,12 +2282,15 @@ select option { text-align: left; }
     renderCleanerCards30d(customers);
   }
 
-  // Move-out cleans are the "transient" job_types — first-visit customers
-  // whose first job is one of these are flagged Non-Qualified for cleaner
-  // attribution purposes (parallels the Target Customers split logic, but
-  // here it's driven by the job_type instead of Jaylee's manual tag).
-  const NON_QUALIFIED_JOB_TYPES = new Set(['Move In/Out', 'Move Out']);
-  const isMoveOutJobType = jt => NON_QUALIFIED_JOB_TYPES.has((jt || '').trim());
+  // Qualified vs Non-Qualified is driven by Jaylee's conversion_reason tag —
+  // the same dropdown that lives in Target Customers on Operations AND in
+  // the One-Off table on Past Customers. Both write to the shared Supabase
+  // conversion_reasons store, so what Jaylee sees on those tabs is exactly
+  // what Cleaner Performance reads. As Jaylee back-fills move-out tags on
+  // older customers (Past Customers tab), the YTD attribution updates.
+  const MOVE_OUT_REASON_CP = 'Move-out clean (transient)';
+  const isCustomerNonQualified = cid =>
+    getConversionReason(cid) === MOVE_OUT_REASON_CP;
 
   // Shared helper: aggregate per-cleaner stats from a filtered customer
   // population (first-visit credits) and a filtered jobs population (raw
@@ -2293,8 +2299,8 @@ select option { text-align: left; }
     const stats = new Map();
     const ensure = name => {
       if (!stats.has(name)) stats.set(name, {
-        qualified: 0,            // first-visit (not move-out)
-        non_qualified: 0,        // first-visit (move-out)
+        qualified: 0,            // first-visit (not tagged move-out)
+        non_qualified: 0,        // first-visit (Jaylee-tagged move-out)
         qualified_converted: 0,  // qualified customers that became recurring
         total_jobs: 0,           // ANY completed visit attribution (job-level)
         recurring_jobs: 0,       // completed jobs at recurring cadence
@@ -2305,7 +2311,7 @@ select option { text-align: left; }
     for (const c of customersForAttribution) {
       const cleaners = c.first_visit_cleaners || [];
       if (!cleaners.length || !c.first_visit) continue;
-      const isMoveOut = isMoveOutJobType(c.first_visit_job_type);
+      const isMoveOut = isCustomerNonQualified(c.customer_id);
       const converted = (!!c.is_recurring && c.state !== 'Lost') ||
                         ((c.future_recurring_count || 0) > 0);
       for (const cleaner of cleaners) {
