@@ -1081,12 +1081,14 @@ select option { text-align: left; }
     // 1. Active Recurring — full roster size (Active + Brand New + Paused, all on roster)
     const activeRecurring = recurringNow.length;
 
-    // 2. Est. MRR — sum of (rate × 30 / cadence-days) across the active roster.
-    // Same calc as the Customer Book tab; surfaced here for daily visibility.
-    const cadDaysMap = { 'Weekly': 7, 'Bi-Weekly': 14, 'Every 3 Weeks': 21, 'Monthly': 30 };
+    // 2. Est. MRR — sum across the active roster using the visits-per-month
+    // convention (Weekly = 4, Bi-Weekly = 2, Every 3 Weeks = 4/3, Monthly = 1).
+    // Same formula as the Customer Book and Net-30d tiles, so all MRR numbers
+    // across the dashboard agree.
+    const VPM_OPS = { 'Weekly': 4, 'Bi-Weekly': 2, 'Every 3 Weeks': 4 / 3, 'Monthly': 1 };
     const mrr = recurringNow.reduce((a, c) => {
-      const cd = cadDaysMap[c.frequency];
-      return (cd && c.rate) ? a + c.rate * (30 / cd) : a;
+      const v = VPM_OPS[c.frequency];
+      return (v && c.rate) ? a + c.rate * v : a;
     }, 0);
 
     // 3. Net 30d — Gained minus Lost from the rolling roster-change bucketing.
