@@ -2232,11 +2232,14 @@ select option { text-align: left; }
         }).join('')}</tbody>
       </table>`;
 
-    // Win-back: former recurring with last_visit within last 365 days AND ltv >= 500
+    // Win-back: former recurring with last_visit within last 365 days AND
+    // ltv >= 500, AND NOT marked as cancelled-due-to-Moved (they no longer
+    // live at the property we'd clean — not a real win-back target).
     const oneYearAgo = new Date(today); oneYearAgo.setDate(oneYearAgo.getDate() - 365);
     const winBack = formerRecurring
       .filter(c => c.last_visit && new Date(c.last_visit + 'T00:00:00') >= oneYearAgo)
       .filter(c => (c.ltv || 0) >= 500)
+      .filter(c => cancellationReason(c.customer_id) !== 'Moved')
       .sort((a, b) => (b.ltv || 0) - (a.ltv || 0));
     gridIn('winBackTable',
       [{ name: 'Customer', formatter: c => clickableCustomer(c) },
