@@ -615,15 +615,17 @@ select option { text-align: left; }
   <section id="book" class="tab">
     <div class="kpi-strip" id="bookKpis"></div>
 
-    <div class="row-2">
-      <div class="card">
-        <h2>Recurring by State</h2>
-        <div class="chart-wrap short"><canvas id="stateDonut"></canvas></div>
-      </div>
-      <div class="card">
-        <h2>Recurring by Cadence</h2>
-        <div class="chart-wrap short"><canvas id="cadenceDonut"></canvas></div>
-      </div>
+    <div class="card">
+      <h2>Recurring Roster Growth — Since Jan 2026</h2>
+      <p class="txt-muted" style="margin:-4px 0 8px 0;font-size:12px">
+        Each month's gained vs lost recurring customers. The line on the right axis is the cumulative net change to the roster since Jan 1, 2026 — a single trajectory of how the roster is growing year-to-date.
+      </p>
+      <div class="chart-wrap"><canvas id="rosterGrowthChart"></canvas></div>
+    </div>
+
+    <div class="card">
+      <h2>Recurring by Cadence</h2>
+      <div class="chart-wrap short"><canvas id="cadenceDonut"></canvas></div>
     </div>
 
     <div class="row-2">
@@ -2083,13 +2085,74 @@ select option { text-align: left; }
       { label: 'New Recurring (90d)', value: newLocked.length },
     ]);
 
-    // State donut
-    const stateCounts = {};
-    recurring.forEach(c => stateCounts[c.state] = (stateCounts[c.state] || 0) + 1);
-    drawChart('stateDonut', 'doughnut', {
-      labels: Object.keys(stateCounts),
-      datasets: [{ data: Object.values(stateCounts), backgroundColor: Object.keys(stateCounts).map(stateColor) }],
-    }, { plugins: { legend: { position: 'right' } } });
+    // Recurring Roster Growth — monthly gained vs lost since Jan 2026 with a
+    // cumulative net-change line. "Gained" = customers whose first_rec_visit
+    // landed that month. "Lost" = formerly-recurring customers (no longer on
+    // the active roster) whose last_rec_visit was that month, used as a proxy
+    // for when they effectively left. Active roster customers can't be in the
+    // Lost set.
+    const yearStart = '2026-01-01';
+    const thisYM    = TODAY.slice(0, 7);
+    const months    = (() => {
+      const out = [];
+      let y = 2026, m = 1;
+      const [ty, tm] = thisYM.split('-').map(Number);
+      while (y < ty || (y === ty && m <= tm)) {
+        out.push(`${y}-${String(m).padStart(2, '0')}`);
+        m++; if (m > 12) { y++; m = 1; }
+      }
+      return out;
+    })();
+    const gainedByMonth = Object.fromEntries(months.map(m => [m, 0]));
+    const lostByMonth   = Object.fromEntries(months.map(m => [m, 0]));
+    for (const c of customers) {
+      const frv = c.first_rec_visit;
+      if (frv && frv >= yearStart) {
+        const ym = frv.slice(0, 7);
+        if (ym in gainedByMonth) gainedByMonth[ym]++;
+      }
+      // Lost-from-roster: had ≥3 historical recurring visits, no longer active
+      const isFormerRec = (c.historical_rec_count || 0) >= 3 &&
+                         (!c.is_recurring || c.state === 'Lost');
+      if (isFormerRec) {
+        const lrv = c.last_rec_visit;
+        if (lrv && lrv >= yearStart) {
+          const ym = lrv.slice(0, 7);
+          if (ym in lostByMonth) lostByMonth[ym]++;
+        }
+      }
+    }
+    const gainedSeries = months.map(m => gainedByMonth[m]);
+    const lostSeries   = months.map(m => lostByMonth[m]);
+    const netCumulative = [];
+    let cum = 0;
+    for (let i = 0; i < months.length; i++) {
+      cum += gainedSeries[i] - lostSeries[i];
+      netCumulative.push(cum);
+    }
+
+    drawChart('rosterGrowthChart', 'bar', {
+      labels: months,
+      datasets: [
+        { label: 'Gained',     data: gainedSeries,            backgroundColor: '#0f7158',
+          yAxisID: 'y',  stack: 'flow' },
+        { label: 'Lost',       data: lostSeries.map(v => -v), backgroundColor: '#9c2a2a',
+          yAxisID: 'y',  stack: 'flow' },
+        { label: 'Net Change', data: netCumulative,           type: 'line',
+          borderColor: '#1b5e8a', backgroundColor: '#1b5e8a', yAxisID: 'y1', tension: 0.3,
+          pointRadius: 3 },
+      ],
+    }, {
+      plugins: { legend: { position: 'top' } },
+      scales: {
+        x:  { stacked: true },
+        y:  { position: 'left',  stacked: true, title: { display: true, text: 'Monthly flow' },
+              ticks: { precision: 0 } },
+        y1: { position: 'right', grid: { drawOnChartArea: false },
+              title: { display: true, text: 'Cumulative net' },
+              ticks: { precision: 0 } },
+      },
+    });
 
     // Cadence donut
     const cadCounts = {};
