@@ -616,9 +616,9 @@ select option { text-align: left; }
     <div class="kpi-strip" id="bookKpis"></div>
 
     <div class="card">
-      <h2>Recurring Roster Growth — Since Jan 2026</h2>
+      <h2>Recurring Roster — Since Jan 2026</h2>
       <p class="txt-muted" style="margin:-4px 0 8px 0;font-size:12px">
-        Each month's gained vs lost recurring customers. The line on the right axis is the cumulative net change to the roster since Jan 1, 2026 — a single trajectory of how the roster is growing year-to-date.
+        Each month's bar (above zero) is the total recurring roster at month-end, split into <strong>Retained</strong> (carryover after this month's losses) and <strong>Gained</strong> (new recurring customers). The red bar below zero shows <strong>Lost</strong> recurring customers that month. Hover any month for the four-number breakdown (Total / Gained / Lost / Net).
       </p>
       <div class="chart-wrap"><canvas id="rosterGrowthChart"></canvas></div>
     </div>
@@ -2067,33 +2067,61 @@ select option { text-align: left; }
   function renderBook() {
     const customers = applyOverridesToCustomers();
     const recurring = customers.filter(c => c.is_recurring && c.state !== 'Lost');
-    const needAttention = recurring.filter(c => ['At Risk', 'Overdue', 'Brand New'].includes(c.state));
     const newLocked = recurring.filter(c => c.new_recurring_locked);
 
-    // est MRR = sum of (rate × 30/cadence_days)
-    const cadDays = { 'Weekly': 7, 'Bi-Weekly': 14, 'Every 3 Weeks': 21, 'Monthly': 30 };
-    const mrr = recurring.reduce((a, c) => {
-      const cd = cadDays[c.frequency];
-      if (cd && c.rate) return a + c.rate * (30 / cd);
-      return a;
-    }, 0);
+    // Visits-per-month multipliers (4 weeks/month convention) — same as the
+    // Operations Net-30d tile, so MRR numbers line up across the dashboard.
+    const VPM = { 'Weekly': 4, 'Bi-Weekly': 2, 'Every 3 Weeks': 4 / 3, 'Monthly': 1 };
+    const mrrFor = c => (c.rate || 0) * (VPM[c.frequency] || 0);
+    const mrr = recurring.reduce((a, c) => a + mrrFor(c), 0);
+
+    // YTD 2026 roster movement (used for the new tiles + the chart below).
+    // Gained: any customer with first_rec_visit in 2026.
+    // Lost  : any ever-recurring customer (had a first_rec_visit) that is no
+    //         longer on the active roster, whose last activity (recurring
+    //         visit if available, otherwise any visit) was in 2026 — that's
+    //         the month they effectively left. Catches both heavy churners
+    //         (former recurring with 3+ visits) and light churners (signed
+    //         up, did 1-2 recurring visits, then left).
+    const yearStart = '2026-01-01';
+    const everRecurring = c => !!c.first_rec_visit;
+    const notOnRoster   = c => !c.is_recurring || c.state === 'Lost';
+    const leftDateOf    = c => c.last_rec_visit || c.last_visit;
+    let ytdGained = 0, ytdGainedMrr = 0;
+    let ytdLost   = 0, ytdLostMrr   = 0;
+    for (const c of customers) {
+      const frv = c.first_rec_visit;
+      if (frv && frv >= yearStart) { ytdGained++; ytdGainedMrr += mrrFor(c); }
+      if (everRecurring(c) && notOnRoster(c)) {
+        const left = leftDateOf(c);
+        if (left && left >= yearStart) { ytdLost++; ytdLostMrr += mrrFor(c); }
+      }
+    }
+    const netYtd    = ytdGained - ytdLost;
+    const netMrr    = ytdGainedMrr - ytdLostMrr;
+    const netCls    = netMrr >= 0 ? 'delta-up' : 'delta-down';
+    const netSign   = netMrr >= 0 ? '+' : '−';
+    const netCntCls = netYtd >= 0 ? 'delta-up' : 'delta-down';
+    const netCntSn  = netYtd >= 0 ? '+' : '−';
 
     renderKpiStrip('bookKpis', [
-      { label: 'Recurring Customers', value: recurring.length },
-      { label: 'Est. MRR', value: fmt$(mrr) },
-      { label: 'Need Attention', value: needAttention.length },
-      { label: 'New Recurring (90d)', value: newLocked.length },
+      { label: 'Recurring Customers', value: recurring.length, sub: 'on roster today' },
+      { label: 'Est. MRR',            value: fmt$(mrr),       sub: 'monthly recurring revenue' },
+      { label: 'New Recurring (YTD)', value: ytdGained,        sub: `+${fmt$(ytdGainedMrr)} MRR added` },
+      { label: 'Lost Recurring (YTD)',value: ytdLost,          sub: `−${fmt$(ytdLostMrr)} MRR` },
+      { label: 'Net (YTD)',
+        value: `<span class="${netCntCls}">${netCntSn}${Math.abs(netYtd)}</span>`,
+        sub:   `<span class="${netCls}">${netSign}${fmt$(Math.abs(netMrr))} MRR</span>` },
     ]);
 
-    // Recurring Roster Growth — monthly gained vs lost since Jan 2026 with a
-    // cumulative net-change line. "Gained" = customers whose first_rec_visit
-    // landed that month. "Lost" = formerly-recurring customers (no longer on
-    // the active roster) whose last_rec_visit was that month, used as a proxy
-    // for when they effectively left. Active roster customers can't be in the
-    // Lost set.
-    const yearStart = '2026-01-01';
-    const thisYM    = TODAY.slice(0, 7);
-    const months    = (() => {
+    // Recurring Roster Growth — bar height per month = total recurring
+    // roster at end of that month. The bar is stacked: gray "Retained"
+    // (carryover after this month's losses) + green "Gained" (this month's
+    // new recurring customers). Lost is shown as a red bar below zero in a
+    // separate stack so all four numbers (Total / Gained / Lost / Net) read
+    // off the same x-axis.
+    const thisYM = TODAY.slice(0, 7);
+    const months = (() => {
       const out = [];
       let y = 2026, m = 1;
       const [ty, tm] = thisYM.split('-').map(Number);
@@ -2103,54 +2131,96 @@ select option { text-align: left; }
       }
       return out;
     })();
-    const gainedByMonth = Object.fromEntries(months.map(m => [m, 0]));
-    const lostByMonth   = Object.fromEntries(months.map(m => [m, 0]));
+
+    // Per-month gained / lost counts (same heuristics as the KPI tiles above).
+    const gByMonth = Object.fromEntries(months.map(m => [m, 0]));
+    const lByMonth = Object.fromEntries(months.map(m => [m, 0]));
     for (const c of customers) {
       const frv = c.first_rec_visit;
       if (frv && frv >= yearStart) {
         const ym = frv.slice(0, 7);
-        if (ym in gainedByMonth) gainedByMonth[ym]++;
+        if (ym in gByMonth) gByMonth[ym]++;
       }
-      // Lost-from-roster: had ≥3 historical recurring visits, no longer active
-      const isFormerRec = (c.historical_rec_count || 0) >= 3 &&
-                         (!c.is_recurring || c.state === 'Lost');
-      if (isFormerRec) {
-        const lrv = c.last_rec_visit;
-        if (lrv && lrv >= yearStart) {
-          const ym = lrv.slice(0, 7);
-          if (ym in lostByMonth) lostByMonth[ym]++;
+      if (everRecurring(c) && notOnRoster(c)) {
+        const left = leftDateOf(c);
+        if (left && left >= yearStart) {
+          const ym = left.slice(0, 7);
+          if (ym in lByMonth) lByMonth[ym]++;
         }
       }
     }
-    const gainedSeries = months.map(m => gainedByMonth[m]);
-    const lostSeries   = months.map(m => lostByMonth[m]);
-    const netCumulative = [];
-    let cum = 0;
-    for (let i = 0; i < months.length; i++) {
-      cum += gainedSeries[i] - lostSeries[i];
-      netCumulative.push(cum);
+
+    // Starting roster = customers recurring at end of Dec 2025 — joined
+    // before 2026 AND either still on the roster today OR had any activity
+    // during 2026 (meaning they were still on the roster going in).
+    let starting = 0;
+    for (const c of customers) {
+      if (!c.first_rec_visit || c.first_rec_visit >= yearStart) continue;
+      if (!notOnRoster(c)) starting++;
+      else {
+        const left = leftDateOf(c);
+        if (left && left >= yearStart) starting++;
+      }
+    }
+
+    // Roll month-by-month: retained = prior_total − this-month-lost;
+    // total_end = retained + gained = prior_total + (gained − lost).
+    let running = starting;
+    const retainedSeries = [];
+    const gainedSeries   = [];
+    const lostSeriesNeg  = []; // negative for plotting below zero
+    const totalSeries    = [];
+    for (const m of months) {
+      const g = gByMonth[m];
+      const l = lByMonth[m];
+      const retained = running - l;
+      running = retained + g;
+      retainedSeries.push(retained);
+      gainedSeries.push(g);
+      lostSeriesNeg.push(-l);
+      totalSeries.push(running);
     }
 
     drawChart('rosterGrowthChart', 'bar', {
       labels: months,
       datasets: [
-        { label: 'Gained',     data: gainedSeries,            backgroundColor: '#0f7158',
-          yAxisID: 'y',  stack: 'flow' },
-        { label: 'Lost',       data: lostSeries.map(v => -v), backgroundColor: '#9c2a2a',
-          yAxisID: 'y',  stack: 'flow' },
-        { label: 'Net Change', data: netCumulative,           type: 'line',
-          borderColor: '#1b5e8a', backgroundColor: '#1b5e8a', yAxisID: 'y1', tension: 0.3,
-          pointRadius: 3 },
+        { label: 'Retained',
+          data: retainedSeries, backgroundColor: '#cfd5d8',
+          stack: 'roster' },
+        { label: 'Gained',
+          data: gainedSeries, backgroundColor: '#0f7158',
+          stack: 'roster' },
+        { label: 'Lost',
+          data: lostSeriesNeg, backgroundColor: '#9c2a2a',
+          stack: 'lost' },
       ],
     }, {
-      plugins: { legend: { position: 'top' } },
+      plugins: {
+        legend: { position: 'top' },
+        tooltip: {
+          callbacks: {
+            // Show all 4 numbers (Total / Gained / Lost / Net) in one tooltip.
+            afterBody: (items) => {
+              if (!items.length) return '';
+              const i = items[0].dataIndex;
+              const g = gainedSeries[i];
+              const l = -lostSeriesNeg[i];
+              const t = totalSeries[i];
+              const net = g - l;
+              const netStr = (net >= 0 ? '+' : '') + net;
+              return [
+                `Total roster: ${t}`,
+                `Gained:       +${g}`,
+                `Lost:         −${l}`,
+                `Net:          ${netStr}`,
+              ];
+            },
+          },
+        },
+      },
       scales: {
-        x:  { stacked: true },
-        y:  { position: 'left',  stacked: true, title: { display: true, text: 'Monthly flow' },
-              ticks: { precision: 0 } },
-        y1: { position: 'right', grid: { drawOnChartArea: false },
-              title: { display: true, text: 'Cumulative net' },
-              ticks: { precision: 0 } },
+        x: { stacked: true },
+        y: { stacked: true, ticks: { precision: 0 } },
       },
     });
 
