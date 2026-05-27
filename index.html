@@ -632,8 +632,11 @@ select option { text-align: left; }
         <div id="newRecurringTable"></div>
       </div>
       <div class="card">
-        <h2>At-Risk Watch List</h2>
-        <div id="atRiskTable"></div>
+        <h2>Recurring Customer Lifespan</h2>
+        <p class="txt-muted" style="margin:-4px 0 8px 0;font-size:12px">
+          How long each current recurring customer has been with us, bucketed from their first recurring visit. As a customer passes a threshold they roll into the next bucket.
+        </p>
+        <div class="chart-wrap short"><canvas id="recurringLifespanBar"></canvas></div>
       </div>
     </div>
 
@@ -2104,13 +2107,35 @@ select option { text-align: left; }
       newLocked.sort((a, b) => (b.first_rec_visit || '').localeCompare(a.first_rec_visit || ''))
         .map(c => [c, c.frequency || '—', fmtDate(c.first_rec_visit || c.first_visit), c.ytd_revenue, c.state]));
 
-    // At-risk
-    gridIn('atRiskTable',
-      [{ name: 'Customer', formatter: c => clickableCustomer(c) },
-       { name: 'State', formatter: s => gridjs.html(stateBadge(s)) },
-       'Cadence', 'Days Since', 'Next', 'Reason'],
-      needAttention.sort((a, b) => stateRank(b.state) - stateRank(a.state))
-        .map(c => [c, c.state, c.frequency || '—', c.days_since_last == null ? '—' : c.days_since_last, fmtDate(c.next_scheduled), c.state_reason || '']));
+    // Recurring Customer Lifespan — how long each active recurring customer
+    // has been with us. Day-count derived from first_rec_visit (the day they
+    // became recurring); falls back to first_visit for the rare brand-new
+    // customer who's on the roster but hasn't completed their first recurring
+    // visit yet. Buckets follow the user-requested thresholds: 1mo / 3mo /
+    // 6mo / 12mo / 18mo / 2+yr.
+    const _todayMs = new Date(TODAY + 'T00:00:00').getTime();
+    const tenures = recurring.map(c => {
+      const start = c.first_rec_visit || c.first_visit;
+      if (!start) return null;
+      return Math.floor((_todayMs - new Date(start + 'T00:00:00').getTime()) / 86400000);
+    }).filter(d => d != null && d >= 0);
+    const lifespanBins = [
+      ['< 1 mo',    d => d < 30],
+      ['1–3 mo',    d => d >= 30  && d < 90],
+      ['3–6 mo',    d => d >= 90  && d < 180],
+      ['6–12 mo',   d => d >= 180 && d < 365],
+      ['12–18 mo',  d => d >= 365 && d < 547],
+      ['2+ yrs',    d => d >= 547],     // "2+ yrs" per user's phrasing — 18mo+
+    ];
+    drawChart('recurringLifespanBar', 'bar', {
+      labels: lifespanBins.map(b => b[0]),
+      datasets: [{
+        label: 'Customers',
+        data: lifespanBins.map(b => tenures.filter(b[1]).length),
+        backgroundColor: ['#9c6cd8','#1b5e8a','#3b9c75','#0f7158','#c97b1a','#b9530a'],
+      }],
+    }, { plugins: { legend: { display: false } },
+         scales: { y: { ticks: { precision: 0 } } } });
 
     // Top 20 by YTD
     const top20 = [...recurring].sort((a, b) => (b.ytd_revenue || 0) - (a.ytd_revenue || 0)).slice(0, 20);
