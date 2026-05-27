@@ -618,7 +618,7 @@ select option { text-align: left; }
     <div class="card">
       <h2>Recurring Roster — Since Jan 2026</h2>
       <p class="txt-muted" style="margin:-4px 0 8px 0;font-size:12px">
-        Each month's bar (above zero) is the total recurring roster at month-end, split into <strong>Retained</strong> (carryover after this month's losses) and <strong>Gained</strong> (new recurring customers). The red bar below zero shows <strong>Lost</strong> recurring customers that month. Hover any month for the four-number breakdown (Total / Gained / Lost / Net).
+        Each month's bar shows the recurring roster trajectory. The <strong>main color</strong> is the carryover of customers present both at the start and end of the month. The <strong>green</strong> top segment is a net gain (bar top = end-of-month total). The <strong>red</strong> top segment is a net loss (bar top = start-of-month total, base = end). Hover for the full breakdown — start / gained / lost / net.
       </p>
       <div class="chart-wrap"><canvas id="rosterGrowthChart"></canvas></div>
     </div>
@@ -2163,56 +2163,59 @@ select option { text-align: left; }
       }
     }
 
-    // Roll month-by-month: retained = prior_total − this-month-lost;
-    // total_end = retained + gained = prior_total + (gained − lost).
+    // Roll month-by-month. For each month, capture: start (carryover from the
+    // previous month), gained, lost, end. The bar's visual composition is:
+    //   • base segment = min(start, end) — the customers present BOTH at the
+    //     start and end of the month (main color)
+    //   • on top: net change as a single segment
+    //       net ≥ 0 → green segment of height net  (bar top = end roster)
+    //       net < 0 → red segment of height |net|  (bar top = start roster)
+    // So a +3 month with start=50 shows 50 main + 3 green = 53 total.
+    // A −1 month with start=50 shows 49 main + 1 red = 50 total.
+    // End-of-month carries to next month's start.
     let running = starting;
-    const retainedSeries = [];
-    const gainedSeries   = [];
-    const lostSeriesNeg  = []; // negative for plotting below zero
-    const totalSeries    = [];
-    for (const m of months) {
-      const g = gByMonth[m];
-      const l = lByMonth[m];
-      const retained = running - l;
-      running = retained + g;
-      retainedSeries.push(retained);
-      gainedSeries.push(g);
-      lostSeriesNeg.push(-l);
-      totalSeries.push(running);
-    }
+    const monthData = months.map(m => {
+      const start = running;
+      const gained = gByMonth[m];
+      const lost   = lByMonth[m];
+      const end    = start + gained - lost;
+      const net    = gained - lost;
+      running = end;
+      return { month: m, start, gained, lost, net, end };
+    });
+
+    const baseData    = monthData.map(d => Math.min(d.start, d.end));
+    const netGainData = monthData.map(d => Math.max( d.net, 0));
+    const netLossData = monthData.map(d => Math.max(-d.net, 0));
 
     drawChart('rosterGrowthChart', 'bar', {
       labels: months,
       datasets: [
-        { label: 'Retained',
-          data: retainedSeries, backgroundColor: '#cfd5d8',
-          stack: 'roster' },
-        { label: 'Gained',
-          data: gainedSeries, backgroundColor: '#0f7158',
-          stack: 'roster' },
-        { label: 'Lost',
-          data: lostSeriesNeg, backgroundColor: '#9c2a2a',
-          stack: 'lost' },
+        { label: 'Roster',   data: baseData,    backgroundColor: '#0f7158', stack: 'roster' },
+        { label: 'Net Gain', data: netGainData, backgroundColor: '#3b9c75', stack: 'roster' },
+        { label: 'Net Loss', data: netLossData, backgroundColor: '#9c2a2a', stack: 'roster' },
       ],
     }, {
       plugins: {
         legend: { position: 'top' },
         tooltip: {
+          displayColors: false,
+          // Default per-dataset rows would also appear; suppress them so the
+          // tooltip body has just our four explicit lines (start / gained /
+          // lost / net). The custom title shows the month label.
           callbacks: {
-            // Show all 4 numbers (Total / Gained / Lost / Net) in one tooltip.
-            afterBody: (items) => {
-              if (!items.length) return '';
-              const i = items[0].dataIndex;
-              const g = gainedSeries[i];
-              const l = -lostSeriesNeg[i];
-              const t = totalSeries[i];
-              const net = g - l;
-              const netStr = (net >= 0 ? '+' : '') + net;
+            title: items => items[0]?.label || '',
+            label: () => '',
+            afterBody: items => {
+              if (!items.length) return [];
+              const d = monthData[items[0].dataIndex];
+              const netStr = (d.net >= 0 ? '+' : '') + d.net;
               return [
-                `Total roster: ${t}`,
-                `Gained:       +${g}`,
-                `Lost:         −${l}`,
-                `Net:          ${netStr}`,
+                `Total recurring (start of month): ${d.start}`,
+                `Gained: +${d.gained}`,
+                `Lost: −${d.lost}`,
+                ``,
+                `NET: ${netStr}    (End of month: ${d.end})`,
               ];
             },
           },
