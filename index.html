@@ -2517,18 +2517,31 @@ select option { text-align: left; }
   function renderConversionReasonsDistribution(oneOff) {
     const wrap = document.getElementById('convReasonsDistribution');
     if (!wrap) return;
-    const counts = Object.fromEntries([...CONVERSION_REASONS, '(untagged)'].map(r => [r, 0]));
+
+    // Move-out cleans are inherently transient — Jaylee tags them so they
+    // don't drag down the conversion-rate calculation in Target Customers.
+    // Here we pull them out of the distribution entirely so the bars below
+    // show only the reasons that retarget-able customers gave us.
+    const MOVE_OUT = 'Move-out clean (transient)';
+    const reasonsForBars = CONVERSION_REASONS.filter(r => r !== MOVE_OUT);
+
+    let moveOutCount = 0;
+    const counts = Object.fromEntries([...reasonsForBars, '(untagged)'].map(r => [r, 0]));
     for (const c of oneOff) {
       const r = getConversionReason(c.customer_id);
+      if (r === MOVE_OUT) { moveOutCount++; continue; }
       counts[r || '(untagged)']++;
     }
-    const max = Math.max(1, ...Object.values(counts));
+
     const total = oneOff.length;
-    const tagged = total - counts['(untagged)'];
+    const considerable = total - moveOutCount;          // bar denominator
+    const tagged = considerable - counts['(untagged)']; // tagged within the considerable pool
+    const max = Math.max(1, ...Object.values(counts));
+
     const rows = Object.entries(counts)
       .sort((a, b) => b[1] - a[1])
       .map(([label, n]) => {
-        const pct = total ? (n / total * 100).toFixed(0) : 0;
+        const pct = considerable ? (n / considerable * 100).toFixed(0) : 0;
         const barPct = (n / max * 100).toFixed(1);
         const isUntagged = label === '(untagged)';
         return `<div class="conv-dist-row${isUntagged ? ' conv-dist-untagged' : ''}">
@@ -2537,9 +2550,27 @@ select option { text-align: left; }
           <div class="conv-dist-count">${n}<span class="txt-muted" style="font-weight:400;margin-left:4px">(${pct}%)</span></div>
         </div>`;
       }).join('');
+
+    // Move-out callout above the bars — separates the "transient by nature"
+    // group from the "could have converted" group so the bar chart reads
+    // cleanly as a retarget picture.
+    const moveOutPct = total ? Math.round(moveOutCount / total * 100) : 0;
+    const moveOutBlock = `
+      <div style="display:flex;justify-content:space-between;align-items:center;background:var(--neutral-soft);border-radius:8px;padding:10px 14px;margin-bottom:14px">
+        <div>
+          <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.04em">Move-Out Cleans (excluded)</div>
+          <div style="font-size:13px;color:var(--text);margin-top:2px">Transient by nature — not part of the retarget pool</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:22px;font-weight:700;color:var(--text)">${moveOutCount}</div>
+          <div style="font-size:11px;color:var(--muted)">${moveOutPct}% of all one-offs</div>
+        </div>
+      </div>`;
+
     wrap.innerHTML = `
+      ${moveOutBlock}
       <div class="txt-muted" style="font-size:12px;margin-bottom:10px">
-        ${tagged} of ${total} one-off customers tagged. Use the customer modal (click any name above) to tag the rest — the more we tag, the clearer the retarget picture.
+        ${tagged} of ${considerable} retarget-able one-offs tagged. Use the customer modal (click any name above) to tag the rest — the more we tag, the clearer the retarget picture. Move-outs are shown above and not counted in these bars.
       </div>
       ${rows}`;
   }
