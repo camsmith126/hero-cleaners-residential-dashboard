@@ -2116,8 +2116,13 @@ select option { text-align: left; }
     // Pivoted 6-month table: months across the top row, revenue categories
     // down the left. Two summary rows ("Total Residential" and "Total Revenue")
     // are visually emphasized so the eye can land on them first.
+    // "2026-05" → "May 2026"
+    const monthLabel = ym => {
+      const [y, mo] = ym.split('-').map(Number);
+      return `${MONTH_NAMES[mo - 1]} ${y}`;
+    };
     const monthHeader = `<th>Category</th>` +
-      last6.map(m => `<th class="txt-right">${escapeHtml(m.ym)}</th>`).join('');
+      last6.map(m => `<th class="txt-right">${escapeHtml(monthLabel(m.ym))}</th>`).join('');
 
     const rowOf = (label, perMonthFn, opts = {}) => {
       const cls   = opts.summary ? ' style="background:var(--bg);font-weight:600"' : '';
