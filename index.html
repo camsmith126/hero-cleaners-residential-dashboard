@@ -2113,32 +2113,43 @@ select option { text-align: left; }
     // Commercial column shown only when we have commercial data anywhere in
     // the 6-month window, otherwise it's hidden to keep the table compact.
     const showCommercialCol = anyCommercial;
+    // Pivoted 6-month table: months across the top row, revenue categories
+    // down the left. Two summary rows ("Total Residential" and "Total Revenue")
+    // are visually emphasized so the eye can land on them first.
+    const monthHeader = `<th>Category</th>` +
+      last6.map(m => `<th class="txt-right">${escapeHtml(m.ym)}</th>`).join('');
+
+    const rowOf = (label, perMonthFn, opts = {}) => {
+      const cls   = opts.summary ? ' style="background:var(--bg);font-weight:600"' : '';
+      const muted = opts.muted   ? ' txt-muted' : '';
+      return `<tr${cls}>
+        <td><strong>${escapeHtml(label)}</strong></td>
+        ${last6.map(m => {
+          const v = perMonthFn(m);
+          const txt = v == null || v === 0
+            ? '<span class="txt-muted">—</span>'
+            : fmt$(v);
+          return `<td class="txt-right txt-mono${muted}">${txt}</td>`;
+        }).join('')}
+      </tr>`;
+    };
+
     document.getElementById('sixMonthTable').innerHTML = `
+      <div class="table-wrap">
       <table class="simple-table">
-        <thead><tr>
-          <th>Month</th>
-          <th class="txt-right">Visits</th>
-          <th class="txt-right">Recurring</th>
-          <th class="txt-right">One-Off</th>
-          ${showCommercialCol ? '<th class="txt-right">Commercial</th>' : ''}
-          <th class="txt-right">Total</th>
-          <th class="txt-right">Rec. %</th>
-        </tr></thead>
-        <tbody>${last6.map(m => {
-          const commercial = commRevFor(m.ym);
-          const total      = (m.revenue || 0) + commercial;
-          const recPct     = total ? (m.recurring_revenue / total) : 0;
-          return `<tr>
-            <td>${m.ym}</td>
-            <td class="txt-right">${m.visits}</td>
-            <td class="txt-right txt-mono">${fmt$(m.recurring_revenue)}</td>
-            <td class="txt-right txt-mono">${fmt$(m.one_off_revenue)}</td>
-            ${showCommercialCol ? `<td class="txt-right txt-mono">${commercial ? fmt$(commercial) : '<span class="txt-muted">—</span>'}</td>` : ''}
-            <td class="txt-right txt-mono">${fmt$(total)}</td>
-            <td class="txt-right txt-muted">${fmtPct(recPct)}</td>
-          </tr>`;
-        }).join('')}</tbody>
-      </table>`;
+        <thead><tr>${monthHeader}</tr></thead>
+        <tbody>
+          ${rowOf('Recurring Revenue',       m => m.recurring_revenue || 0)}
+          ${rowOf('One-Off Revenue',         m => m.one_off_revenue   || 0)}
+          ${rowOf('Total Residential',       m => (m.revenue || 0),
+                  { summary: true })}
+          ${rowOf('Commercial Revenue',      m => commRevFor(m.ym),
+                  { muted: !showCommercialCol })}
+          ${rowOf('Total Revenue',           m => (m.revenue || 0) + commRevFor(m.ym),
+                  { summary: true })}
+        </tbody>
+      </table>
+      </div>`;
 
     // Monthly trend — stacked bar (Recurring + One-Off + Commercial) + Visits line.
     const trendDatasets = [
