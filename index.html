@@ -1412,7 +1412,14 @@ select option { text-align: left; }
   function renderNewJobsThisWeek(customers) {
     const [monIso, sunIso] = currentWeekIsoBounds();
     const byId = Object.fromEntries(customers.map(c => [c.customer_id, c]));
+    // "Established" customers (override) are known regulars whose visits
+    // shouldn't trigger any "new customer" surface — e.g., Ridge Event
+    // Center cleans up after events at a recurring pace but isn't a
+    // conversion candidate. Excluded from this feed.
+    const ovs = mergedOverrides();
+    const isEstablished = cid => !!ovs[cid + ':established'];
     const isFreshCustomer = cid => {
+      if (isEstablished(cid)) return false;
       const c = byId[cid];
       if (!c) return false;
       // Brand New, one-off only, returning past customers — the standard
@@ -1692,10 +1699,16 @@ select option { text-align: left; }
     const cutoffIso = iso(cutoff);
 
     const byId = Object.fromEntries(customers.map(c => [c.customer_id, c]));
+    // "Established" customers (e.g. Ridge Event Center) are known regulars,
+    // not conversion candidates. Exclude their visits from this section.
+    const ovsTC = mergedOverrides();
 
-    // Completed visits in trailing 14d with a one-off job type
+    // Completed visits in trailing 30d with a one-off job type, excluding
+    // established customers.
     const visits = (SNAPSHOT.completed_recent || []).filter(j =>
-      j.date >= cutoffIso && j.date <= TODAY && !RECURRING_JOB_TYPES.includes(j.job_type)
+      j.date >= cutoffIso && j.date <= TODAY
+      && !RECURRING_JOB_TYPES.includes(j.job_type)
+      && !ovsTC[j.customer_id + ':established']
     );
 
     // Group by customer — keep the LATEST visit per customer
