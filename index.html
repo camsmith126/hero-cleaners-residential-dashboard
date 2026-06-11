@@ -2648,6 +2648,14 @@ select option { text-align: left; }
   // population (first-visit credits) and a filtered jobs population (raw
   // completed visits). Returns Map<cleanerName, statsObj>.
   function _aggregateCleanerStats(customersForAttribution, completedJobsForCount) {
+    // Established customers (commercial-to-residential migrations like Circle B,
+    // Ridge) are excluded from first-visit attribution — they're known regulars,
+    // not real conversions. Their job-level visits still count toward the
+    // cleaner's workload (Total Jobs / Recurring Jobs) since the cleaner does
+    // physically do the work.
+    const _ovsAggCleaner = mergedOverrides();
+    const _isEstabAgg = cid => !!_ovsAggCleaner[cid + ':established'];
+
     const stats = new Map();
     const ensure = name => {
       if (!stats.has(name)) stats.set(name, {
@@ -2663,6 +2671,7 @@ select option { text-align: left; }
     for (const c of customersForAttribution) {
       const cleaners = c.first_visit_cleaners || [];
       if (!cleaners.length || !c.first_visit) continue;
+      if (_isEstabAgg(c.customer_id)) continue;  // skip established (no conversion credit)
       const isMoveOut = isCustomerNonQualified(c.customer_id);
       const converted = (!!c.is_recurring && c.state !== 'Lost') ||
                         ((c.future_recurring_count || 0) > 0);
