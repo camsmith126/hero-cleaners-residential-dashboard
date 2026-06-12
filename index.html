@@ -2438,10 +2438,11 @@ select option { text-align: left; }
     const top20 = [...recurring].sort((a, b) => (b.ytd_revenue || 0) - (a.ytd_revenue || 0)).slice(0, 20);
     gridIn('top20Table',
       [{ name: 'Customer', formatter: c => clickableCustomer(c) },
-       'Cadence', { name: 'YTD', formatter: v => fmt$(v) },
+       'Cadence', { name: 'Avg / Mo', formatter: v => fmt$(v) },
+       { name: 'YTD', formatter: v => fmt$(v) },
        { name: 'LTV', formatter: v => fmt$(v) },
        'Visits', { name: 'Last', formatter: d => fmtDate(d) }],
-      top20.map(c => [c, c.frequency || '—', c.ytd_revenue, c.ltv, c.visits_total, c.last_visit]));
+      top20.map(c => [c, c.frequency || '—', mrrFor(c), c.ytd_revenue, c.ltv, c.visits_total, c.last_visit]));
 
     // Full roster
     const search = document.getElementById('rosterSearch');
@@ -2452,11 +2453,12 @@ select option { text-align: left; }
         [{ name: 'Customer', formatter: c => clickableCustomer(c) },
          { name: 'State', formatter: s => gridjs.html(stateBadge(s)) },
          'Cadence',
+         { name: 'Avg / Mo', formatter: v => fmt$(v) },
          { name: 'Last', formatter: d => fmtDate(d) },
          { name: 'Next', formatter: d => fmtDate(d) },
          { name: 'YTD', formatter: v => fmt$(v) },
          { name: 'LTV', formatter: v => fmt$(v) }],
-        filtered.map(c => [c, c.state, c.frequency || '—', c.last_visit, c.next_scheduled, c.ytd_revenue, c.ltv]));
+        filtered.map(c => [c, c.state, c.frequency || '—', mrrFor(c), c.last_visit, c.next_scheduled, c.ytd_revenue, c.ltv]));
     };
     search.oninput = renderRoster;
     renderRoster();
