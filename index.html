@@ -1152,17 +1152,23 @@ select option { text-align: left; }
     const mtdJobs = (SNAPSHOT.completed_recent || [])
       .filter(j => (j.date || '').startsWith(thisMonthYM));
     const mtdActual = mtdJobs.reduce((a, j) => a + (j.revenue || 0), 0);
-    const futureJobs = (SNAPSHOT.month_jobs || [])
-      .filter(j => j.date > TODAY);
-    const futureExpected = futureJobs.reduce((a, j) => a + (j.rate || 0), 0);
-    const monthTotal = mtdActual + futureExpected;
+    const futureJobs    = (SNAPSHOT.month_jobs || []).filter(j => j.date > TODAY);
+    const scheduledJobs = futureJobs.filter(j => !j.forecast);
+    const forecastJobs  = futureJobs.filter(j =>  j.forecast);
+    const scheduledExpected = scheduledJobs.reduce((a, j) => a + (j.rate || 0), 0);
+    const forecastExpected  = forecastJobs.reduce((a, j) => a + (j.rate || 0), 0);
+    const monthTotal = mtdActual + scheduledExpected + forecastExpected;
     const monthName = MONTH_NAMES[parseInt(thisMonthYM.split('-')[1], 10) - 1];
+
+    const expectedSub =
+      `<span class="delta-up">${fmt$(mtdActual)} done</span> · ${fmt$(scheduledExpected)} booked`
+      + (forecastExpected > 0 ? ` · <em>${fmt$(forecastExpected)} forecast</em>` : '');
 
     renderKpiStrip('opsExpectedRev', [
       { label: `Expected ${monthName}`, value: fmt$(monthTotal),
-        sub: `<span class="delta-up">${fmt$(mtdActual)} done</span> · ${fmt$(futureExpected)} booked` },
+        sub: expectedSub },
       { label: 'Visits MTD', value: mtdJobs.length,
-        sub: `${futureJobs.length} more on the calendar` },
+        sub: `${scheduledJobs.length} more on the calendar` },
     ]);
 
     // "New Jobs This Week" mini-pipeline — jobs Mon..Sun this week for customers
@@ -1221,14 +1227,27 @@ select option { text-align: left; }
     // recurring roster (growth tracker).
     renderRosterHealth(customers);
 
-    // Week table
+    // Week table — forecast rows (Ridge-style migrated customers without
+    // HCP-scheduled future visits) get a 'Projected $X' display + italic
+    // treatment so they read as "expected" rather than confirmed scheduled.
     gridIn('weekTable',
       [{ name: 'Date', formatter: d => fmtDate(d) },
        { name: 'Customer', formatter: c => clickableCustomer(c) },
        'Job Type',
-       { name: 'Cadence', formatter: f => f || '—' }],
+       { name: 'Cadence / Forecast', formatter: f => f || '—' }],
       weekJobs.map(j => {
         const cust = customersById[j.customer_id];
+        if (j.forecast) {
+          // Synthetic forecast row — no clickable customer modal since we
+          // have no full customer record. Show the projected amount in the
+          // last column.
+          return [
+            gridjs.html(`<em class="txt-muted">~ this week</em>`),
+            gridjs.html(`<em>${escapeHtml(j.display_name || '—')}</em>`),
+            gridjs.html(`<em class="txt-muted">${escapeHtml(j.job_type || 'Forecast')}</em>`),
+            gridjs.html(`<em>Projected ${fmt$(j.rate || 0)}</em>`),
+          ];
+        }
         return [j.date, j, displayJobType(j.job_type, cust), j.frequency];
       }));
   }
