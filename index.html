@@ -1675,24 +1675,55 @@ select option { text-align: left; }
     const row = __store.conversion_reasons[cid];
     return (row && row.reason) || '';
   }
+  function getConversionNote(cid) {
+    const row = __store.conversion_reasons[cid];
+    return (row && row.note) || '';
+  }
   window.__setConversion = function (cid, value) {
+    // Preserve any existing note alongside the new reason. If both reason
+    // and note are clearing, delete the row entirely.
+    const existing = __store.conversion_reasons[cid] || {};
     if (value) {
       _upsertConversionRow({
-        customer_id: cid, reason: value,
-        set_at: new Date().toISOString(), set_by: 'jaylee',
+        ...existing,
+        customer_id: cid,
+        reason: value,
+        set_at: new Date().toISOString(), set_by: existing.set_by || 'jaylee',
+      });
+    } else if (existing.note) {
+      _upsertConversionRow({
+        ...existing,
+        customer_id: cid,
+        reason: null,
+        set_at: new Date().toISOString(),
       });
     } else {
       _deleteConversionRow(cid);
     }
     showToast('Reason saved (shared)');
-    // Re-render every view that surfaces this reason: Target Customers on
-    // Operations, the One-Off table and distribution panel on Past Customers,
-    // and Cleaner Performance (which uses the same tag to split qualified
-    // vs non-qualified attribution).
     const customers = applyOverridesToCustomers();
     renderTargetCustomers(customers);
     renderPast();
     renderPerformance();
+  };
+  window.__setConversionNote = function (cid, note) {
+    // Saves the free-text context Jaylee writes under the reason dropdown.
+    // Preserves any existing reason; if both reason and note clear out,
+    // delete the row.
+    const existing = __store.conversion_reasons[cid] || {};
+    const trimmed = (note || '').trim();
+    if (!trimmed && !existing.reason) {
+      _deleteConversionRow(cid);
+    } else {
+      _upsertConversionRow({
+        ...existing,
+        customer_id: cid,
+        note: trimmed || null,
+        set_at: new Date().toISOString(), set_by: existing.set_by || 'jaylee',
+      });
+    }
+    showToast('Note saved (shared)');
+    // No re-render needed — note doesn't affect bucketing or counts.
   };
 
   // ----- Cancellation-reason inline-save (used by the Former Recurring table) -----
@@ -1817,10 +1848,20 @@ select option { text-align: left; }
         ? `<span class="conv-converted-cell">—</span>`
         : (() => {
             const current = getConversionReason(cid);
+            const currentNote = getConversionNote(cid);
             const opts = ['', ...CONVERSION_REASONS].map(r =>
               `<option value="${escapeHtml(r)}"${r === current ? ' selected' : ''}>${r ? escapeHtml(r) : '— select reason —'}</option>`
             ).join('');
-            return `<select class="conv-reason ${current ? 'is-set' : ''}" onchange="window.__setConversion('${escapeHtml(cid)}', this.value)">${opts}</select>`;
+            // Free-text context input below the dropdown. Saves on blur and
+            // on Enter (defer focus). Preserves the dropdown's reason value.
+            return `
+              <select class="conv-reason ${current ? 'is-set' : ''}" onchange="window.__setConversion('${escapeHtml(cid)}', this.value)">${opts}</select>
+              <input type="text" class="conv-note" placeholder="optional context…"
+                value="${escapeHtml(currentNote)}"
+                onblur="window.__setConversionNote('${escapeHtml(cid)}', this.value)"
+                onkeydown="if(event.key==='Enter'){this.blur();}"
+                style="display:block;width:100%;max-width:240px;margin-top:4px;padding:5px 10px;border:1px solid var(--border);border-radius:6px;font:inherit;font-size:11px;background:var(--card)"
+              >`;
           })();
       const cleaners = visit.cleaners || '';
       return `<tr>
