@@ -1520,7 +1520,18 @@ select option { text-align: left; }
       const rowClass = done ? 'completed' : (isFirstRec ? 'first-recurring' : 'upcoming');
       const name = j.display_name || c.display_name || '—';
       const jobType = displayJobType(j.job_type, c);
-      const amount = done && j.revenue != null ? fmt$(j.revenue) : '';
+      // Amount: completed visits show the actual revenue; upcoming visits
+      // show the customer's stored rate (HCP doesn't resolve revenue until
+      // a visit completes) so Jaylee can see expected revenue for the week.
+      // Falls back to "—" when no rate is known yet (truly new customers).
+      let amount;
+      if (done && j.revenue != null) {
+        amount = fmt$(j.revenue);
+      } else if (c.rate) {
+        amount = `<span class="txt-muted">~${fmt$(c.rate)}</span>`;
+      } else {
+        amount = '<span class="txt-muted" style="opacity:0.5">—</span>';
+      }
       // Tag: Brand New marker still useful in "All New Jobs" so Jaylee can
       // distinguish brand-new from returning-past at a glance. First-recurring
       // rows don't need a badge — the section header carries that meaning.
