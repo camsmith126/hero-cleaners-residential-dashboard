@@ -1160,7 +1160,19 @@ select option { text-align: left; }
     const mtdJobs = (SNAPSHOT.completed_recent || [])
       .filter(j => (j.date || '').startsWith(thisMonthYM));
     const mtdActual = mtdJobs.reduce((a, j) => a + (j.revenue || 0), 0);
-    const futureJobs    = (SNAPSHOT.month_jobs || []).filter(j => j.date > TODAY);
+    // Include TODAY's still-scheduled visits in the "future booked" bucket —
+    // they haven't completed yet (so they're not in MTD actual) but they
+    // ARE expected to happen and should count toward expected revenue.
+    // Dedup against completed_recent for today so a visit that finished
+    // earlier today (already in MTD actual) doesn't get double-counted via
+    // its lingering HCP-scheduled row.
+    const completedTodayKeys = new Set(
+      mtdJobs.filter(j => j.date === TODAY)
+             .map(j => `${j.customer_id}|${j.date}`)
+    );
+    const futureJobs = (SNAPSHOT.month_jobs || [])
+      .filter(j => j.date >= TODAY)
+      .filter(j => !completedTodayKeys.has(`${j.customer_id}|${j.date}`));
     const scheduledJobs = futureJobs.filter(j => !j.forecast);
     const forecastJobs  = futureJobs.filter(j =>  j.forecast);
     const scheduledExpected = scheduledJobs.reduce((a, j) => a + (j.rate || 0), 0);
