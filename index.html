@@ -1283,7 +1283,9 @@ select option { text-align: left; }
     const onRoster = !!c.is_recurring && c.state !== 'Lost';
     if (onRoster) {
       // FUTURE RECURRING — on the roster but no first recurring visit yet.
-      if (!c.first_rec_visit) buckets.add('future');
+      // Established (grandfathered commercial migrations) are known regulars,
+      // not future-first-visit candidates — skip.
+      if (!c.first_rec_visit && !c.established) buckets.add('future');
       // GAINED — became recurring within the last 30 days. Anchor uses
       // became_recurring_at (day 1 we caught them on the roster) so newly
       // signed-up future-recurring customers count from sign-up day, not
