@@ -1574,16 +1574,20 @@ select option { text-align: left; }
       const name = j.display_name || c.display_name || '—';
       const jobType = displayJobType(j.job_type, c);
       // Amount: completed visits show the actual revenue; upcoming visits
-      // show the customer's stored rate (HCP doesn't resolve revenue until
-      // a visit completes) so Jaylee can see expected revenue for the week.
-      // Falls back to "—" when no rate is known yet (truly new customers).
+      // show the per-visit rate — j.rate is populated by the pipeline from
+      // HCP total_amount / 100 when set (accurate for brand-new Intro Cleans
+      // where the customer has no derived median yet), falling back to the
+      // customer's stored rate. Only shows "—" when neither exists.
       let amount;
-      if (done && j.revenue != null) {
+      if (done && j.revenue != null && j.revenue > 0) {
         amount = fmt$(j.revenue);
-      } else if (c.rate) {
-        amount = `<span class="txt-muted">~${fmt$(c.rate)}</span>`;
       } else {
-        amount = '<span class="txt-muted" style="opacity:0.5">—</span>';
+        const est = j.rate || c.rate;
+        if (est) {
+          amount = `<span class="txt-muted">~${fmt$(est)}</span>`;
+        } else {
+          amount = '<span class="txt-muted" style="opacity:0.5">—</span>';
+        }
       }
       // Tag: Brand New marker still useful in "All New Jobs" so Jaylee can
       // distinguish brand-new from returning-past at a glance. First-recurring
