@@ -1830,14 +1830,22 @@ select option { text-align: left; }
     const ovsTC = mergedOverrides();
 
     // Completed visits in trailing 30d with a one-off job type, excluding
-    // established customers. Established flag now lives on the customer
-    // record too — check both for reliability across id-keying variants.
-    const visits = (SNAPSHOT.completed_recent || []).filter(j =>
-      j.date >= cutoffIso && j.date <= TODAY
-      && !RECURRING_JOB_TYPES.includes(j.job_type)
-      && !ovsTC[j.customer_id + ':established']
-      && !(byId[j.customer_id] && byId[j.customer_id].established)
-    );
+    // established customers AND customers who converted to recurring more
+    // than 30 days ago (they're established regulars — a one-off Custom
+    // Clean from a long-time recurring customer isn't a conversion target).
+    const visits = (SNAPSHOT.completed_recent || []).filter(j => {
+      if (j.date < cutoffIso || j.date > TODAY) return false;
+      if (RECURRING_JOB_TYPES.includes(j.job_type)) return false;
+      if (ovsTC[j.customer_id + ':established']) return false;
+      const c = byId[j.customer_id];
+      if (c && c.established) return false;
+      // Long-established recurring — not a target. became_recurring_at is
+      // day 1 we caught them on the roster (grandfathered_at wins when set,
+      // otherwise earliest state-history snapshot / first recurring visit).
+      if (c && c.is_recurring && c.became_recurring_at
+              && c.became_recurring_at < cutoffIso) return false;
+      return true;
+    });
 
     // Group by customer — keep the LATEST visit per customer
     const byCustomer = new Map();
