@@ -1744,8 +1744,14 @@ select option { text-align: left; }
     return (row && row.reason) || '';
   }
   function getConversionNote(cid) {
+    // Read note from either the conversion_reasons.note column (once the
+    // Supabase migration lands) or the workaround: an override row keyed
+    // by override_type='conversion_note'. The override table already has
+    // a note column so this works without any Supabase DDL.
     const row = __store.conversion_reasons[cid];
-    return (row && row.note) || '';
+    if (row && row.note) return row.note;
+    const ovRow = __store.overrides[cid + ':conversion_note'];
+    return (ovRow && ovRow.value) || '';
   }
   window.__setConversion = function (cid, value) {
     // Preserve any existing note alongside the new reason. If both reason
@@ -1776,22 +1782,40 @@ select option { text-align: left; }
   };
   window.__setConversionNote = function (cid, note) {
     // Saves the free-text context Jaylee writes under the reason dropdown.
-    // Preserves any existing reason; if both reason and note clear out,
-    // delete the row.
-    const existing = __store.conversion_reasons[cid] || {};
+    // WORKAROUND: writes to the overrides table (override_type='conversion_note')
+    // because the conversion_reasons.note column doesn't exist in Supabase yet
+    // and I can't run DDL from here. The overrides table already has a note
+    // column and is unrelated to state/cadence overrides that classify_customer
+    // reads — this override_type is inert to the pipeline, purely a data
+    // carrier for the frontend. Once the Supabase column is added we can move
+    // back to conversion_reasons.note transparently.
     const trimmed = (note || '').trim();
-    if (!trimmed && !existing.reason) {
-      _deleteConversionRow(cid);
+    const key = cid + ':conversion_note';
+    if (!trimmed) {
+      delete __store.overrides[key];
+      if (SUPABASE_CFG.enabled) {
+        _trackWrite(_sb('overrides?customer_id=' + encodeURIComponent(cid)
+                        + '&override_type=eq.conversion_note',
+                        { method: 'DELETE' }))
+          .catch(err => { console.error(err); showToast('Save failed — ' + err.message); });
+      }
     } else {
-      _upsertConversionRow({
-        ...existing,
+      const row = {
         customer_id: cid,
-        note: trimmed || null,
-        set_at: new Date().toISOString(), set_by: existing.set_by || 'jaylee',
-      });
+        override_type: 'conversion_note',
+        value: trimmed,
+        note: null,
+        expires: null,
+        set_at: new Date().toISOString(),
+        set_by: 'jaylee',
+      };
+      __store.overrides[key] = row;
+      if (SUPABASE_CFG.enabled) {
+        _trackWrite(_sb('overrides', { method: 'POST', body: JSON.stringify(row) }))
+          .catch(err => { console.error(err); showToast('Save failed (note) — ' + err.message); });
+      }
     }
     showToast('Note saved (shared)');
-    // No re-render needed — note doesn't affect bucketing or counts.
   };
 
   // ----- Cancellation-reason inline-save (used by the Former Recurring table) -----
