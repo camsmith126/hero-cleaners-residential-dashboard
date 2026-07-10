@@ -1255,19 +1255,37 @@ select option { text-align: left; }
     for (const j of mtdJobs) {
       currentVisitKeys.add(`mtd:${j.customer_id}:${j.date}`);
     }
-    let lossesRecurring = 0, lossesNonRecurring = 0;
-    const lossListRecurring = [], lossListNonRecurring = [];
+    // Losses split into two kinds:
+    //   * Lost      — the CUSTOMER is no longer recurring today (they
+    //                 cancelled all future recurring visits, e.g. Maggie).
+    //                 A full-customer churn.
+    //   * Cancelled — the customer is STILL recurring, they just skipped
+    //                 one specific visit (e.g. Raymond dropped 7/10 but
+    //                 7/24, 8/7, 8/21 are still on his calendar).
+    let lostRecurring = 0, cancelledRecurring = 0, lossesNonRecurring = 0;
+    const lostCustomers = new Map(), cancelledCustomers = new Map();
+    const lossListNonRecurring = [];
     for (const v of baselineVisits) {
       if (currentVisitKeys.has(v.visit_key)) continue;
       const rate = v.rate || 0;
       if (v.is_recurring) {
-        lossesRecurring += rate;
-        lossListRecurring.push(v);
+        const c = byIdForMovement[v.customer_id];
+        const stillRecurring = c && c.is_recurring;
+        if (stillRecurring) {
+          cancelledRecurring += rate;
+          const cur = cancelledCustomers.get(v.display_name) || {v:0, r:0};
+          cancelledCustomers.set(v.display_name, {v: cur.v + 1, r: cur.r + rate});
+        } else {
+          lostRecurring += rate;
+          const cur = lostCustomers.get(v.display_name) || {v:0, r:0};
+          lostCustomers.set(v.display_name, {v: cur.v + 1, r: cur.r + rate});
+        }
       } else {
         lossesNonRecurring += rate;
         lossListNonRecurring.push(v);
       }
     }
+    const lossesRecurring = lostRecurring + cancelledRecurring;
 
     // Additions: scheduled visits added since month-start + non-recurring MTD.
     // Synth visits are always pre-month; real HCP uses hcp_created_at.
@@ -1299,33 +1317,45 @@ select option { text-align: left; }
 
     // Compact per-tile movement card. Baseline is the BIG number (frozen),
     // additions/losses/current sit below with color coding so Cam scans it
-    // as a mini-waterfall.
-    const movementSub = (added, lost, current) => {
-      const addedRow = added > 0
-        ? `<span class="delta-up">+${fmt$(added)}</span> added`
-        : `<span class="txt-muted">no additions</span>`;
-      const lostRow = lost > 0
-        ? `<span class="delta-down">−${fmt$(lost)}</span> cancelled`
-        : `<span class="txt-muted">no cancellations</span>`;
+    // as a mini-waterfall. Recurring tile splits losses into Lost (customer
+    // no longer recurring) vs Cancelled (recurring customer skipped a visit).
+    const addedLine = a => a > 0
+      ? `<span class="delta-up">+${fmt$(a)}</span> added`
+      : `<span class="txt-muted">no additions</span>`;
+    const nowLine = c => `<div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border);font-weight:600">
+        <span class="txt-muted" style="font-weight:400">now:</span> ${fmt$(c)}
+      </div>`;
+
+    const recurringSub = () => {
+      const lostRow = lostRecurring > 0
+        ? `<span class="delta-down">−${fmt$(lostRecurring)}</span> lost <span class="txt-muted" style="font-size:11px">(${lostCustomers.size} customer${lostCustomers.size!==1?'s':''})</span>`
+        : `<span class="txt-muted">no lost customers</span>`;
+      const cancelRow = cancelledRecurring > 0
+        ? `<span class="delta-down">−${fmt$(cancelledRecurring)}</span> cancelled <span class="txt-muted" style="font-size:11px">(${Array.from(cancelledCustomers.values()).reduce((a,x)=>a+x.v,0)} visit skip${Array.from(cancelledCustomers.values()).reduce((a,x)=>a+x.v,0)!==1?'s':''})</span>`
+        : `<span class="txt-muted">no visit skips</span>`;
       return `<div style="line-height:1.6">
-        <div>${addedRow}</div>
+        <div>${addedLine(additionsRecurring)}</div>
         <div>${lostRow}</div>
-        <div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border);font-weight:600">
-          <span class="txt-muted" style="font-weight:400">now:</span> ${fmt$(current)}
-        </div>
+        <div>${cancelRow}</div>
+        ${nowLine(currentRecurring)}
       </div>`;
     };
+    const simpleSub = (added, lost, current) => `<div style="line-height:1.6">
+      <div>${addedLine(added)}</div>
+      <div>${lost > 0 ? `<span class="delta-down">−${fmt$(lost)}</span> cancelled` : `<span class="txt-muted">no cancellations</span>`}</div>
+      ${nowLine(current)}
+    </div>`;
 
     renderKpiStrip('opsExpectedRev', [
       { label: `Recurring — start of ${monthName}`,
         value: fmt$(blRecurring),
-        sub: movementSub(additionsRecurring, lossesRecurring, currentRecurring) },
+        sub: recurringSub() },
       { label: `One-Off — start of ${monthName}`,
         value: fmt$(blNonRecurring),
-        sub: movementSub(additionsNonRecurring, lossesNonRecurring, currentNonRecurring) },
+        sub: simpleSub(additionsNonRecurring, lossesNonRecurring, currentNonRecurring) },
       { label: `Total — start of ${monthName}`,
         value: fmt$(blTotal),
-        sub: movementSub(additionsTotal, lossesTotal, currentTotal) },
+        sub: simpleSub(additionsTotal, lossesTotal, currentTotal) },
     ]);
 
     // "New Jobs This Week" mini-pipeline — jobs Mon..Sun this week for customers
