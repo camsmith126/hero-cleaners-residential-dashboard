@@ -529,6 +529,25 @@ select option { text-align: left; }
       <div id="nonQualifiedTargetTableWrap"></div>
     </div>
 
+    <!-- Losses & Cancellations — mirrors the movement math on the recurring
+         tile: Lost customers (churned entirely, no future recurring) and
+         Cancelled visits (recurring customer skipped a specific visit). -->
+    <div class="card" id="lossesCard" style="display:none">
+      <h2>Losses &amp; Cancellations <span class="txt-muted" style="font-weight:400;font-size:13px" id="lossesMonthLabel"></span></h2>
+      <p class="txt-muted" style="margin:-4px 0 12px 0;font-size:12px">
+        Recurring revenue that <em>would have</em> come in this month but
+        didn't. <strong>Lost</strong> = customer churned entirely (no future
+        recurring visits scheduled). <strong>Cancelled / Skipped</strong> = still
+        a recurring customer, just missed this visit.
+      </p>
+
+      <h3 style="margin:6px 0 8px 0">Lost customers <span class="txt-muted" style="font-weight:400;font-size:12px" id="lostCount"></span></h3>
+      <div id="lostTableWrap"></div>
+
+      <h3 style="margin:18px 0 8px 0">Cancelled / Skipped visits <span class="txt-muted" style="font-weight:400;font-size:12px" id="cancelledCount"></span></h3>
+      <div id="cancelledTableWrap"></div>
+    </div>
+
     <div class="card" id="expiringCard" style="display:none">
       <h2>Overrides Expiring This Week</h2>
       <div id="expiringRows"></div>
@@ -1445,6 +1464,10 @@ select option { text-align: left; }
     // and editable reason-for-no-conversion for the non-converters.
     renderTargetCustomers(customers);
 
+    // Losses & Cancellations — mirrors the recurring tile's Lost / Cancelled
+    // math with the actual customer + visit revenue detail.
+    renderLossesAndCancellations(customers);
+
     // Phase 1 commercial sidecar — show this week's commercial jobs as their
     // own opaque bucket. Visibility-only; nothing flows into residential KPIs.
     renderCommercialThisWeek();
@@ -2206,6 +2229,138 @@ select option { text-align: left; }
                'No first-time cleans in the last 30 days.');
     renderInto('nonQualifiedTargetTableWrap', nonQualifiedRows,
                'No move-out cleans tagged yet. When Jaylee marks a job as Move-out via the Reason dropdown above, it moves here.');
+  }
+
+  // Losses & Cancellations — a customer-and-visit level view of the
+  // recurring tile's Lost + Cancelled numbers. Sourced from the ledger:
+  // baseline visits that are no longer present in the current calendar.
+  // Ledger visit.is_recurring separates recurring losses from one-off;
+  // customer.is_recurring at read time separates Lost (customer churned)
+  // from Cancelled (customer still recurring, just skipped this visit).
+  function renderLossesAndCancellations(customers) {
+    const card = document.getElementById('lossesCard');
+    if (!card) return;
+    const thisMonthYM = TODAY.slice(0, 7);
+    const monthName = MONTH_NAMES[parseInt(thisMonthYM.split('-')[1], 10) - 1];
+    document.getElementById('lossesMonthLabel').textContent = `— ${monthName} ${thisMonthYM.split('-')[0]}`;
+
+    const baselineVisits = SNAPSHOT.monthly_baseline_visits || [];
+    const byId = Object.fromEntries(customers.map(c => [c.customer_id, c]));
+
+    // Build set of visit keys still on the current calendar (mirrors the
+    // movement-tile logic exactly so numbers match).
+    const mtdJobs = (SNAPSHOT.completed_recent || [])
+      .filter(j => (j.date || '').startsWith(thisMonthYM));
+    const completedTodayKeys = new Set(
+      mtdJobs.filter(j => j.date === TODAY)
+             .map(j => `${j.customer_id}|${j.date}`)
+    );
+    const futureJobs = (SNAPSHOT.month_jobs || [])
+      .filter(j => j.date >= TODAY)
+      .filter(j => !completedTodayKeys.has(`${j.customer_id}|${j.date}`));
+
+    const currentVisitKeys = new Set();
+    for (const j of futureJobs) {
+      if (j.forecast) continue;
+      if (j.source === 'config_synth') currentVisitKeys.add(`synth:${j.customer_id}:${j.date}`);
+      else if (j.job_id) currentVisitKeys.add(j.job_id);
+      else currentVisitKeys.add(`hcp:${j.customer_id}:${j.date}`);
+    }
+    for (const j of mtdJobs) currentVisitKeys.add(`mtd:${j.customer_id}:${j.date}`);
+
+    // Group losses by customer: which ones are Lost (customer no longer
+    // recurring) vs Cancelled (customer still recurring). Only track
+    // recurring-side losses — non-recurring "losses" would be rare and
+    // less actionable so we hide them here.
+    const lostByCustomer = new Map();     // customer_id → {c, visits: []}
+    const cancelledByCustomer = new Map();
+    for (const v of baselineVisits) {
+      if (currentVisitKeys.has(v.visit_key)) continue;
+      if (!v.is_recurring) continue;
+      const c = byId[v.customer_id];
+      const stillRecurring = !!(c && c.is_recurring);
+      const target = stillRecurring ? cancelledByCustomer : lostByCustomer;
+      const entry = target.get(v.customer_id) ||
+                    { customer: c || {display_name: v.display_name, customer_id: v.customer_id}, visits: [] };
+      entry.visits.push(v);
+      target.set(v.customer_id, entry);
+    }
+
+    if (lostByCustomer.size === 0 && cancelledByCustomer.size === 0) {
+      card.style.display = 'none';
+      return;
+    }
+    card.style.display = '';
+
+    document.getElementById('lostCount').textContent =
+      lostByCustomer.size ? `(${lostByCustomer.size})` : '';
+    document.getElementById('cancelledCount').textContent =
+      cancelledByCustomer.size
+        ? `(${cancelledByCustomer.size} customer${cancelledByCustomer.size !== 1 ? 's' : ''}, ${
+            Array.from(cancelledByCustomer.values()).reduce((a, e) => a + e.visits.length, 0)
+          } visit${Array.from(cancelledByCustomer.values()).reduce((a, e) => a + e.visits.length, 0) !== 1 ? 's' : ''})`
+        : '';
+
+    const openCustomerAttr = c =>
+      c.customer_id
+        ? `data-customer="${escapeHtml(c.customer_id)}" onclick="window.__openCustomer(this); return false;"`
+        : '';
+
+    // Table renderer — one row per customer. Visits column shows dates
+    // and rate breakdown, revenue-lost column shows the total.
+    const renderRow = (entry, kind) => {
+      const c = entry.customer;
+      const visits = entry.visits.slice().sort((a, b) => a.visit_date.localeCompare(b.visit_date));
+      const totalLost = visits.reduce((a, v) => a + (v.rate || 0), 0);
+      const datesTxt = visits
+        .map(v => `${fmtDate(v.visit_date)} <span class="txt-muted">${fmt$(v.rate || 0)}</span>`)
+        .join(' · ');
+      const cadenceTxt = c.frequency || '—';
+      const lastTxt = c.last_visit ? fmtDate(c.last_visit) : '—';
+      const nameCell = c.customer_id
+        ? `<a href="#" ${openCustomerAttr(c)}><strong>${escapeHtml(c.display_name || '?')}</strong></a>`
+        : `<strong>${escapeHtml(c.display_name || '?')}</strong>`;
+      return `<tr>
+        <td>${nameCell}</td>
+        <td>${escapeHtml(cadenceTxt)}</td>
+        <td>${lastTxt}</td>
+        <td>${datesTxt}</td>
+        <td class="right"><strong class="delta-down">−${fmt$(totalLost)}</strong></td>
+      </tr>`;
+    };
+
+    const buildTable = (map, kind, empty) => {
+      if (!map.size) return `<p class="txt-muted" style="margin:0">${empty}</p>`;
+      const entries = Array.from(map.values());
+      entries.sort((a, b) => {
+        const totalA = a.visits.reduce((s, v) => s + (v.rate || 0), 0);
+        const totalB = b.visits.reduce((s, v) => s + (v.rate || 0), 0);
+        return totalB - totalA;
+      });
+      const totalLost = entries.reduce(
+        (s, e) => s + e.visits.reduce((a, v) => a + (v.rate || 0), 0), 0);
+      return `<table class="target-table">
+        <thead><tr>
+          <th>Customer</th>
+          <th>Cadence</th>
+          <th>Last Visit</th>
+          <th>${kind === 'lost' ? 'Missed visits' : 'Skipped visits'}</th>
+          <th class="right">Revenue lost</th>
+        </tr></thead>
+        <tbody>${entries.map(e => renderRow(e, kind)).join('')}</tbody>
+        <tfoot><tr>
+          <td colspan="4" class="right txt-muted" style="font-weight:600">Total ${kind === 'lost' ? 'lost' : 'skipped'} revenue this month:</td>
+          <td class="right"><strong class="delta-down">−${fmt$(totalLost)}</strong></td>
+        </tr></tfoot>
+      </table>`;
+    };
+
+    document.getElementById('lostTableWrap').innerHTML = buildTable(
+      lostByCustomer, 'lost',
+      'No customers churned this month.');
+    document.getElementById('cancelledTableWrap').innerHTML = buildTable(
+      cancelledByCustomer, 'cancelled',
+      'No recurring customers have skipped a visit this month.');
   }
 
   // ============================================================
