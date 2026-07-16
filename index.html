@@ -1438,11 +1438,12 @@ select option { text-align: left; }
         ? `<span class="delta-down">−${fmt$(cancelledRecurring)}</span> cancelled <span class="txt-muted" style="font-size:11px">(${Array.from(cancelledCustomers.values()).reduce((a,x)=>a+x.v,0)} visit skip${Array.from(cancelledCustomers.values()).reduce((a,x)=>a+x.v,0)!==1?'s':''})</span>`
         : `<span class="txt-muted">no visit skips</span>`;
       // 2026-07-15 rule: split "added" into new recurring vs extras (from
-      // existing recurring customers' bonus non-cadence visits).
+      // existing recurring customers' bonus non-cadence visits). Stacked
+      // one per line for readability.
       const breakdownRow = additionsRecurring > 0
-        ? `<div class="txt-muted" style="font-size:11px;padding-left:12px">
-             new recurring ${fmt$(additionsRecurringNew)}
-             · extras ${fmt$(additionsRecurringExtras)}
+        ? `<div class="txt-muted" style="font-size:11px;padding-left:12px;line-height:1.5">
+             <div>new recurring ${fmt$(additionsRecurringNew)}</div>
+             <div>extras ${fmt$(additionsRecurringExtras)}</div>
            </div>`
         : '';
       return `<div style="line-height:1.6">
