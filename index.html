@@ -1300,19 +1300,30 @@ select option { text-align: left; }
     // all visit types — for the customer-level delta we don't care whether
     // it was recurring-tagged, we only care whether they got their expected
     // volume of revenue).
+    // Also track separately: how many of those $ landed on the customer's
+    // first-ever visit date. Cam's 2026-07-16 rule — the first clean of
+    // any new customer (even if they booked a cleaning plan directly) is
+    // one-off new customer revenue, not recurring. So a newly-recurring
+    // customer's first_visit dollars this month get carved out of the
+    // recurring bucket and routed to one-off-new-customer.
     const currentByCustomer = new Map();
-    const bumpCurrent = (cid, name, dollars) => {
-      const rec = currentByCustomer.get(cid) || {current: 0, name};
+    const bumpCurrent = (cid, name, dollars, isOnFirstVisitDate) => {
+      const rec = currentByCustomer.get(cid) || {current: 0, firstVisitDollars: 0, name};
       rec.current += dollars;
+      if (isOnFirstVisitDate) rec.firstVisitDollars += dollars;
       currentByCustomer.set(cid, rec);
     };
     for (const j of scheduledJobs) {
       const c = byIdForMovement[j.customer_id];
-      bumpCurrent(j.customer_id, c ? c.display_name : (j.customer_name || '?'), j.rate || 0);
+      const firstVisitIso = c && c.first_visit && c.first_visit.slice(0, 10);
+      const isFirst = firstVisitIso && j.date === firstVisitIso;
+      bumpCurrent(j.customer_id, c ? c.display_name : (j.customer_name || '?'), j.rate || 0, isFirst);
     }
     for (const j of mtdJobs) {
       const c = byIdForMovement[j.customer_id];
-      bumpCurrent(j.customer_id, c ? c.display_name : (j.customer_name || '?'), j.revenue || 0);
+      const firstVisitIso = c && c.first_visit && c.first_visit.slice(0, 10);
+      const isFirst = firstVisitIso && j.date === firstVisitIso;
+      bumpCurrent(j.customer_id, c ? c.display_name : (j.customer_name || '?'), j.revenue || 0, isFirst);
     }
 
     // "Existing recurring" — customer either grandfathered OR with a prior
@@ -1380,8 +1391,18 @@ select option { text-align: left; }
           extrasCustomers.set(name, (extrasCustomers.get(name) || 0) + delta);
         }
       } else if (isNewRecurringThisMonth(c)) {
-        // Newly recurring this month — all their dollars → new recurring bucket
-        if (actual > 0) additionsRecurringNew += actual;
+        // Newly recurring this month. Per Cam's 2026-07-16 rule:
+        //   - Their FIRST-EVER visit (if it falls in this month) → one-off
+        //     new customer revenue. Even for direct-booked cleaning plans
+        //     the first clean counts here, not in recurring.
+        //   - All their OTHER visits this month → new recurring revenue.
+        // Sarah Liston 7/15 first clean ($229) → one-off new. 7/29 Bi-Weekly
+        // ($175) → new recurring. Nate Richards' first clean was in June so
+        // none of his July visits get carved out — they're all new recurring.
+        const firstAmt = (curInfo && curInfo.firstVisitDollars) || 0;
+        const restAmt = actual - firstAmt;
+        if (firstAmt > 0) additionsOneOffNew += firstAmt;
+        if (restAmt > 0) additionsRecurringNew += restAmt;
       } else if (blInfo && blInfo.hasRecurring) {
         // Was a recurring customer at month start, now not (Dawn/Maggie/Hydee)
         // Their shortfall goes to LOST bucket
