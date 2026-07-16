@@ -1481,22 +1481,21 @@ select option { text-align: left; }
     // new customer (first-time), so Cam sees what part of one-off adds is
     // net-new demand vs. repeat retention.
     const oneOffSub = () => {
-      const totalAdd = additionsOneOffRepeat + additionsOneOffNew;
-      const addedRow = totalAdd > 0
-        ? `<span class="delta-up">+${fmt$(totalAdd)}</span> added`
-        : `<span class="txt-muted">no additions</span>`;
-      const breakdownRow = totalAdd > 0
-        ? `<div class="txt-muted" style="font-size:11px;padding-left:12px">
-             new customer ${fmt$(additionsOneOffNew)}
-             · repeat ${fmt$(additionsOneOffRepeat)}
-           </div>`
+      // Stacked +$ rows (mirrors the recurring tile — no rolled-up "added" line)
+      const newCustomerRow = additionsOneOffNew > 0
+        ? `<div><span class="delta-up">+${fmt$(additionsOneOffNew)}</span> new customer</div>`
         : '';
+      const repeatRow = additionsOneOffRepeat > 0
+        ? `<div><span class="delta-up">+${fmt$(additionsOneOffRepeat)}</span> repeat</div>`
+        : '';
+      const addsBlock = (newCustomerRow || repeatRow)
+        ? `${newCustomerRow}${repeatRow}`
+        : `<div><span class="txt-muted">no additions</span></div>`;
       const cancelRow = lossesNonRecurring > 0
         ? `<span class="delta-down">−${fmt$(lossesNonRecurring)}</span> cancelled`
         : `<span class="txt-muted">no cancellations</span>`;
       return `<div style="line-height:1.6">
-        <div>${addedRow}</div>
-        ${breakdownRow}
+        ${addsBlock}
         <div>${cancelRow}</div>
         ${nowLine(currentNonRecurring)}
       </div>`;
