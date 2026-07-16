@@ -1270,17 +1270,16 @@ select option { text-align: left; }
     //   • actual > baseline → surplus (extras — extra cleans they booked/got)
     //   • actual = baseline → even (reschedules wash out)
     //
-    // Filter OUT retroactive baseline additions (late_normal_recurring and
-    // mtd_recurring sources). Those get written to the ledger after month-
-    // start when the pipeline notices a cadence-matching or completed visit
-    // wasn't captured on July 1. They pollute the baseline for customers who
-    // pre-book extras (Jodi Monthly with 3 pre-scheduled visits). By keeping
-    // baseline to just the July-1-captured rows (source='hcp_api' or
-    // 'config_synth'), Cam's rule works cleanly: any customer with more
-    // actual $ than baseline $ shows as extras, less shows as skipped.
-    const FROZEN_BASELINE_SOURCES = new Set(['hcp_api', 'config_synth']);
+    // Filter OUT only `late_normal_recurring` — that's a heuristic backfill
+    // that adds mid-month cadence-matching visits to the baseline (fine for
+    // Bi-Weekly Linda pattern, wrong for Monthly Jodi with pre-booked extras).
+    // All other sources represent visits that WERE on the July 1 calendar,
+    // just captured differently (mtd_recurring after completion, cancelled_retro
+    // after cancel, pre_month_retro for pre-July bookings that landed in July,
+    // commercial_import for cross-BU reclass, config_synth for grandfathered).
+    const EXCLUDED_BASELINE_SOURCES = new Set(['late_normal_recurring']);
     const baselineVisits = (SNAPSHOT.monthly_baseline_visits || []).filter(v =>
-      FROZEN_BASELINE_SOURCES.has(v.source)
+      !EXCLUDED_BASELINE_SOURCES.has(v.source)
     );
 
     // Aggregate baseline $ per customer + track whether they had any
