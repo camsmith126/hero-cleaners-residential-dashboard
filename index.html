@@ -1262,106 +1262,68 @@ select option { text-align: left; }
     const currentNonRecurring = mtdNonRecurring + bookedNonRecurring + forecastExpected;
     const currentTotal        = currentRecurring + currentNonRecurring;
 
-    // Real cancellations from the visit-level ledger: baseline visits no
-    // longer present in the current calendar. Attributed to recurring vs
-    // non-recurring per the baseline visit's is_recurring at capture time
-    // (Maggie's cancelled Weekly visits count as recurring losses even
-    // though she's now Lost).
+    // === Movement math v5 (Cam 2026-07-15): customer-level dollar delta ===
+    //
+    // Instead of tracking each specific visit_key (which conflated real
+    // cancellations with reschedules/HCP-recreated jobs — a moved 7/10
+    // visit gets a new job_id and looked identical to a canceled one),
+    // we now aggregate PER CUSTOMER for the month:
+    //
+    //   baseline_$ = total scheduled dollars for this customer at month start
+    //                (from monthly_baseline_visits, any visit type)
+    //   current_$  = total dollars this customer will get this month
+    //                (planned + completed, any visit type)
+    //   delta      = current_$ − baseline_$
+    //
+    //   • delta < 0 → real shortfall (Angela's out-of-town skip)
+    //       ↳ customer still recurring → SKIPPED bucket
+    //       ↳ customer no longer recurring → LOST bucket
+    //   • delta > 0 → surplus (Jodi's 2 extra Deep Cleans for company)
+    //       ↳ EXTRAS bucket
+    //   • delta = 0 → clean (rescheduled/recreated jobs wash out)
+    //
+    // Customers NOT in the baseline (new to this month) drive additions via
+    // classifyAdd (new recurring vs new customer vs repeat business).
     const baselineVisits = SNAPSHOT.monthly_baseline_visits || [];
-    const currentVisitKeys = new Set();
-    // Real HCP scheduled + config-synth still on calendar:
-    for (const j of futureJobs) {
-      if (j.forecast) continue;
-      if (j.source === 'config_synth') {
-        currentVisitKeys.add(`synth:${j.customer_id}:${j.date}`);
-      } else if (j.job_id) {
-        currentVisitKeys.add(j.job_id);
-      } else {
-        currentVisitKeys.add(`hcp:${j.customer_id}:${j.date}`);
-      }
-    }
-    // MTD completed with the same customer_id + date shape used by the ledger:
-    for (const j of mtdJobs) {
-      currentVisitKeys.add(`mtd:${j.customer_id}:${j.date}`);
-    }
-    // Losses split into two kinds:
-    //   * Lost      — the CUSTOMER is no longer recurring today (they
-    //                 cancelled all future recurring visits, e.g. Maggie).
-    //                 A full-customer churn.
-    //   * Cancelled — the customer is STILL recurring, they just skipped
-    //                 one specific visit (e.g. Raymond dropped 7/10 but
-    //                 7/24, 8/7, 8/21 are still on his calendar).
-    let lostRecurring = 0, cancelledRecurring = 0, lossesNonRecurring = 0;
-    const lostCustomers = new Map(), cancelledCustomers = new Map();
-    const lossListNonRecurring = [];
+
+    // Aggregate baseline $ per customer + track whether they had any
+    // recurring baseline visits (matters for pure one-off customers whose
+    // shortfall belongs in the one-off cancelled bucket, not recurring).
+    const baselineByCustomer = new Map();
     for (const v of baselineVisits) {
-      if (currentVisitKeys.has(v.visit_key)) continue;
-      const rate = v.rate || 0;
-      if (v.is_recurring) {
-        const c = byIdForMovement[v.customer_id];
-        const stillRecurring = c && c.is_recurring;
-        if (stillRecurring) {
-          cancelledRecurring += rate;
-          const cur = cancelledCustomers.get(v.display_name) || {v:0, r:0};
-          cancelledCustomers.set(v.display_name, {v: cur.v + 1, r: cur.r + rate});
-        } else {
-          lostRecurring += rate;
-          const cur = lostCustomers.get(v.display_name) || {v:0, r:0};
-          lostCustomers.set(v.display_name, {v: cur.v + 1, r: cur.r + rate});
-        }
-      } else {
-        lossesNonRecurring += rate;
-        lossListNonRecurring.push(v);
-      }
+      const cid = v.customer_id;
+      const rec = baselineByCustomer.get(cid) || {
+        baseline: 0, hasRecurring: false, name: v.display_name || '?'
+      };
+      rec.baseline += (v.rate || 0);
+      if (v.is_recurring) rec.hasRecurring = true;
+      baselineByCustomer.set(cid, rec);
     }
-    const lossesRecurring = lostRecurring + cancelledRecurring;
 
-    // Additions = current visits NOT in the baseline ledger. Ledger
-    // membership is the single source of truth: any visit whose key is
-    // in the ledger was on the calendar at month-start. Anything else was
-    // added mid-month. This correctly captures pre-month Deep Cleans that
-    // completed early July (they get captured retroactively by the
-    // pipeline's HCP MTD sweep with key mtd:cid:date).
-    const baselineKeys = new Set(baselineVisits.map(v => v.visit_key));
-    const keyForFuture = j => {
-      if (j.source === 'config_synth') return `synth:${j.customer_id}:${j.date}`;
-      if (j.job_id) return j.job_id;
-      return `hcp:${j.customer_id}:${j.date}`;
+    // Aggregate current $ per customer for this month (planned + completed,
+    // all visit types — for the customer-level delta we don't care whether
+    // it was recurring-tagged, we only care whether they got their expected
+    // volume of revenue).
+    const currentByCustomer = new Map();
+    const bumpCurrent = (cid, name, dollars) => {
+      const rec = currentByCustomer.get(cid) || {current: 0, name};
+      rec.current += dollars;
+      currentByCustomer.set(cid, rec);
     };
-    const keyForMtd = j => `mtd:${j.customer_id}:${j.date}`;
+    for (const j of scheduledJobs) {
+      const c = byIdForMovement[j.customer_id];
+      bumpCurrent(j.customer_id, c ? c.display_name : (j.customer_name || '?'), j.rate || 0);
+    }
+    for (const j of mtdJobs) {
+      const c = byIdForMovement[j.customer_id];
+      bumpCurrent(j.customer_id, c ? c.display_name : (j.customer_name || '?'), j.revenue || 0);
+    }
 
-    // Recurring additions rule (Cam 2026-07-15 refinement):
-    // The RECURRING bucket now splits into two visible sub-lines:
-    //   • "new recurring" — newly-recurring-this-month customers (Nate,
-    //     Megan, Sarah pattern: on the recurring roster but their first
-    //     completed recurring visit is in this month or later, or None)
-    //   • "extras from existing" — existing recurring customers' bonus
-    //     non-cadence visits (Elkridge's Deep Cleans, a Weekly customer
-    //     getting a bonus clean because company is coming)
-    // Existing recurring customers' normal-cadence visits still drop from
-    // additions (they're baseline).
-    //
-    // "Existing recurring" = customer with either:
-    //   (a) established=true (grandfathered commercial migrations), OR
-    //   (b) first_rec_visit populated AND before this month started
-    //       (they've had at least one completed recurring clean in a
-    //       prior month).
-    //
-    // One-off additions split into Repeat Business (customer we've served
-    // before this month) vs New Customer (first-time). Repeat now uses
-    // first_visit only — is_recurring isn't a repeat signal by itself,
-    // since a brand-new customer can be classified as recurring on day 1
-    // just from a future scheduled visit (Sarah Liston pattern).
-    let additionsRecurringNew = 0, additionsRecurringExtras = 0;
-    let additionsOneOffRepeat = 0, additionsOneOffNew = 0;
-
+    // "Existing recurring" — customer either grandfathered OR with a prior
+    // completed recurring visit. Used to route their extras vs. skips.
     const isExistingRecurring = c => {
       if (!c) return false;
       if (c.established) return true;
-      // Must be recurring TODAY as well — otherwise a former recurring
-      // customer (Sarah Grajdura, first_rec_visit 2024, now Lost) would
-      // slip in and her one-off cleans would count as "extras from
-      // existing" when they should be "repeat business" instead.
       return !!(c.is_recurring && c.first_rec_visit
                 && c.first_rec_visit.slice(0, 10) < monthStartIso);
     };
@@ -1373,38 +1335,74 @@ select option { text-align: left; }
       return !!(c.first_visit && c.first_visit.slice(0, 10) < monthStartIso);
     };
 
-    const classifyAdd = (customer, rate, isRecurringVisit) => {
-      if (isRecurringVisit) {
-        if (isExistingRecurring(customer)) return;    // baseline — drop
-        // Newly-recurring-this-month customer's cadence visit → NEW bucket
-        additionsRecurringNew += rate;
-        return;
-      }
-      // Non-recurring visit
-      if (isExistingRecurring(customer)) {
-        // Existing recurring customer booked an extra clean (Elkridge Deep
-        // Clean, Weekly customer's bonus visit) → EXTRAS bucket
-        additionsRecurringExtras += rate;
-        return;
-      }
-      // Non-recurring visit, non-existing-recurring customer
-      if (isCustomerRepeat(customer)) additionsOneOffRepeat += rate;
-      else additionsOneOffNew += rate;
-    };
+    // Walk baseline customers → skips / extras / lost
+    let additionsRecurringNew = 0, additionsRecurringExtras = 0;
+    let additionsOneOffRepeat = 0, additionsOneOffNew = 0;
+    let skippedRecurring = 0, lostRecurring = 0, lossesNonRecurring = 0;
+    const skippedCustomers = new Map();   // name → shortfall $
+    const lostCustomers    = new Map();
+    const extrasCustomers  = new Map();   // name → surplus $
 
-    for (const j of scheduledJobs) {
-      if (baselineKeys.has(keyForFuture(j))) continue;
-      const c = byIdForMovement[j.customer_id];
-      classifyAdd(c, j.rate || 0, !!j.is_recurring);
+    for (const [cid, blInfo] of baselineByCustomer) {
+      const c = byIdForMovement[cid];
+      const current = (currentByCustomer.get(cid) || {}).current || 0;
+      const delta = current - blInfo.baseline;
+      const name = blInfo.name;
+      const isRecToday = !!(c && (c.is_recurring || c.established));
+
+      if (!blInfo.hasRecurring) {
+        // Pure one-off customer with baseline (Elle Lunt-style Intro Clean).
+        // Shortfall goes to one-off cancellations. Surplus is unusual and
+        // gets dropped for now (can revisit if it ever shows up in the wild).
+        if (delta < 0) lossesNonRecurring += (-delta);
+        continue;
+      }
+
+      if (delta < -0.005) {
+        // Shortfall: they got fewer dollars than baseline expected.
+        const shortfall = -delta;
+        if (isRecToday) {
+          skippedRecurring += shortfall;
+          skippedCustomers.set(name, (skippedCustomers.get(name) || 0) + shortfall);
+        } else {
+          lostRecurring += shortfall;
+          lostCustomers.set(name, (lostCustomers.get(name) || 0) + shortfall);
+        }
+      } else if (delta > 0.005) {
+        // Surplus: extras beyond baseline (Jodi's Deep Cleans, bonus visits).
+        additionsRecurringExtras += delta;
+        extrasCustomers.set(name, (extrasCustomers.get(name) || 0) + delta);
+      }
+      // else: within 1¢ of expected, nothing to count
     }
-    for (const j of mtdJobs) {
-      if (baselineKeys.has(keyForMtd(j))) continue;
-      const c = byIdForMovement[j.customer_id];
-      classifyAdd(c, j.revenue || 0, isMtdRecurring(j));
+
+    // Walk NON-baseline customers → additions.
+    // These are customers who didn't exist in baseline but have visits this
+    // month. Route by classifyAdd's three-way split:
+    //   - newly recurring (Sarah/Megan/Nate) → new recurring bucket
+    //   - repeat business (former customer coming back) → one-off repeat
+    //   - new customer (first-time) → one-off new
+    for (const [cid, curInfo] of currentByCustomer) {
+      if (baselineByCustomer.has(cid)) continue;    // handled above
+      const c = byIdForMovement[cid];
+      const dollars = curInfo.current;
+      if (dollars <= 0) continue;
+      if (isNewRecurringThisMonth(c)) {
+        additionsRecurringNew += dollars;
+      } else if (isCustomerRepeat(c)) {
+        additionsOneOffRepeat += dollars;
+      } else {
+        additionsOneOffNew += dollars;
+      }
     }
+
     // Forecast: treat as one-off repeat (grandfathered projections; the
     // customers are existing recurring migrated commercial).
     additionsOneOffRepeat += forecastExpected;
+    // Legacy alias so downstream tile-nowLine math stays intact.
+    const cancelledRecurring = skippedRecurring;
+    const cancelledCustomers = skippedCustomers;
+    const lossesRecurring = lostRecurring + skippedRecurring;
     const additionsRecurring    = additionsRecurringNew + additionsRecurringExtras;
     const additionsNonRecurring = additionsOneOffRepeat + additionsOneOffNew;
 
@@ -1434,9 +1432,9 @@ select option { text-align: left; }
       const lostRow = lostRecurring > 0
         ? `<span class="delta-down">−${fmt$(lostRecurring)}</span> lost <span class="txt-muted" style="font-size:11px">(${lostCustomers.size} customer${lostCustomers.size!==1?'s':''})</span>`
         : `<span class="txt-muted">no lost customers</span>`;
-      const cancelRow = cancelledRecurring > 0
-        ? `<span class="delta-down">−${fmt$(cancelledRecurring)}</span> cancelled <span class="txt-muted" style="font-size:11px">(${Array.from(cancelledCustomers.values()).reduce((a,x)=>a+x.v,0)} visit skip${Array.from(cancelledCustomers.values()).reduce((a,x)=>a+x.v,0)!==1?'s':''})</span>`
-        : `<span class="txt-muted">no visit skips</span>`;
+      const skippedRow = skippedRecurring > 0
+        ? `<span class="delta-down">−${fmt$(skippedRecurring)}</span> skipped <span class="txt-muted" style="font-size:11px">(${skippedCustomers.size} customer${skippedCustomers.size!==1?'s':''})</span>`
+        : `<span class="txt-muted">no skips</span>`;
       // 2026-07-15 rule: two additions rows, each with its own '+$X' —
       // no rolled-up total line above them.
       const newRow = additionsRecurringNew > 0
@@ -1452,7 +1450,7 @@ select option { text-align: left; }
       return `<div style="line-height:1.6">
         ${addsBlock}
         <div>${lostRow}</div>
-        <div>${cancelRow}</div>
+        <div>${skippedRow}</div>
         ${nowLine(currentRecurring)}
       </div>`;
     };
