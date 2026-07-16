@@ -1262,29 +1262,26 @@ select option { text-align: left; }
     const currentNonRecurring = mtdNonRecurring + bookedNonRecurring + forecastExpected;
     const currentTotal        = currentRecurring + currentNonRecurring;
 
-    // === Movement math v5 (Cam 2026-07-15): customer-level dollar delta ===
+    // === Movement math v6 (Cam 2026-07-16): frozen-baseline delta ===
     //
-    // Instead of tracking each specific visit_key (which conflated real
-    // cancellations with reschedules/HCP-recreated jobs — a moved 7/10
-    // visit gets a new job_id and looked identical to a canceled one),
-    // we now aggregate PER CUSTOMER for the month:
+    // Simplest possible rule: baseline = whatever was on the calendar at July
+    // 1st. Compare each customer's actual July $ against their July-1 baseline.
+    //   • actual < baseline → shortfall (skipped, or lost if customer churned)
+    //   • actual > baseline → surplus (extras — extra cleans they booked/got)
+    //   • actual = baseline → even (reschedules wash out)
     //
-    //   baseline_$ = total scheduled dollars for this customer at month start
-    //                (from monthly_baseline_visits, any visit type)
-    //   current_$  = total dollars this customer will get this month
-    //                (planned + completed, any visit type)
-    //   delta      = current_$ − baseline_$
-    //
-    //   • delta < 0 → real shortfall (Angela's out-of-town skip)
-    //       ↳ customer still recurring → SKIPPED bucket
-    //       ↳ customer no longer recurring → LOST bucket
-    //   • delta > 0 → surplus (Jodi's 2 extra Deep Cleans for company)
-    //       ↳ EXTRAS bucket
-    //   • delta = 0 → clean (rescheduled/recreated jobs wash out)
-    //
-    // Customers NOT in the baseline (new to this month) drive additions via
-    // classifyAdd (new recurring vs new customer vs repeat business).
-    const baselineVisits = SNAPSHOT.monthly_baseline_visits || [];
+    // Filter OUT retroactive baseline additions (late_normal_recurring and
+    // mtd_recurring sources). Those get written to the ledger after month-
+    // start when the pipeline notices a cadence-matching or completed visit
+    // wasn't captured on July 1. They pollute the baseline for customers who
+    // pre-book extras (Jodi Monthly with 3 pre-scheduled visits). By keeping
+    // baseline to just the July-1-captured rows (source='hcp_api' or
+    // 'config_synth'), Cam's rule works cleanly: any customer with more
+    // actual $ than baseline $ shows as extras, less shows as skipped.
+    const FROZEN_BASELINE_SOURCES = new Set(['hcp_api', 'config_synth']);
+    const baselineVisits = (SNAPSHOT.monthly_baseline_visits || []).filter(v =>
+      FROZEN_BASELINE_SOURCES.has(v.source)
+    );
 
     // Aggregate baseline $ per customer + track whether they had any
     // recurring baseline visits (matters for pure one-off customers whose
@@ -1351,14 +1348,11 @@ select option { text-align: left; }
     const lostCustomers    = new Map();
     const extrasCustomers  = new Map();   // name → surplus $
 
-    // Helper: get the customer's expected recurring dollars this month.
-    // Prefers the calendar-aware cadence projection from the Python side;
-    // falls back to the frozen baseline sum when projection unavailable.
-    const expectedRecurringDollars = (c, blInfo) => {
-      const cad = c && c.expected_cadence_dollars_this_month;
-      if (typeof cad === 'number') return cad;
-      return blInfo ? blInfo.baseline : 0;
-    };
+    // Helper: expected recurring $ = whatever was captured in the frozen
+    // July-1 baseline. No cadence projection — Cam wants the simple rule
+    // where the baseline is a straight snapshot of "what was on the calendar
+    // at the start of the month" and everything else deviates from that.
+    const expectedRecurringDollars = (c, blInfo) => blInfo ? blInfo.baseline : 0;
 
     // Union of all customers we know about (in baseline OR current)
     const allCids = new Set([
@@ -1426,13 +1420,17 @@ select option { text-align: left; }
     const additionsRecurring    = additionsRecurringNew + additionsRecurringExtras;
     const additionsNonRecurring = additionsOneOffRepeat + additionsOneOffNew;
 
-    // Baselines (frozen). Fall back to current − additions if the snapshot
-    // has no baseline row for this month (shouldn't happen once the pipeline
-    // has captured, but guards against a first-of-month race).
-    const bl = (SNAPSHOT.monthly_baselines || {})[thisMonthYM] || {};
-    const blRecurring    = bl.recurring     != null ? bl.recurring     : currentRecurring    - additionsRecurring    + lossesRecurring;
-    const blNonRecurring = bl.non_recurring != null ? bl.non_recurring : currentNonRecurring - additionsNonRecurring + lossesNonRecurring;
-    const blTotal        = bl.total         != null ? bl.total         : blRecurring + blNonRecurring;
+    // Baselines: sum straight from the FILTERED baseline visits so the
+    // top-line matches the deltas' math (extras/skips/lost are all
+    // computed off the same filtered set). The `monthly_baselines` frozen
+    // totals table includes late_normal/mtd retro sources, so it's stale
+    // vs. the v6 filter — recompute from filtered visits.
+    let blRecurring = 0, blNonRecurring = 0;
+    for (const v of baselineVisits) {
+      const r = v.rate || 0;
+      if (v.is_recurring) blRecurring += r; else blNonRecurring += r;
+    }
+    const blTotal = blRecurring + blNonRecurring;
 
     const additionsTotal = additionsRecurring + additionsNonRecurring;
     const lossesTotal    = lossesRecurring + lossesNonRecurring;
