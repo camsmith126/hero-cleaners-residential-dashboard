@@ -1437,18 +1437,20 @@ select option { text-align: left; }
       const cancelRow = cancelledRecurring > 0
         ? `<span class="delta-down">−${fmt$(cancelledRecurring)}</span> cancelled <span class="txt-muted" style="font-size:11px">(${Array.from(cancelledCustomers.values()).reduce((a,x)=>a+x.v,0)} visit skip${Array.from(cancelledCustomers.values()).reduce((a,x)=>a+x.v,0)!==1?'s':''})</span>`
         : `<span class="txt-muted">no visit skips</span>`;
-      // 2026-07-15 rule: split "added" into new recurring vs extras (from
-      // existing recurring customers' bonus non-cadence visits). Stacked
-      // one per line for readability.
-      const breakdownRow = additionsRecurring > 0
-        ? `<div class="txt-muted" style="font-size:11px;padding-left:12px;line-height:1.5">
-             <div>new recurring ${fmt$(additionsRecurringNew)}</div>
-             <div>extras ${fmt$(additionsRecurringExtras)}</div>
-           </div>`
+      // 2026-07-15 rule: two additions rows, each with its own '+$X' —
+      // no rolled-up total line above them.
+      const newRow = additionsRecurringNew > 0
+        ? `<div><span class="delta-up">+${fmt$(additionsRecurringNew)}</span> new recurring</div>`
         : '';
+      const extrasRow = additionsRecurringExtras > 0
+        ? `<div><span class="delta-up">+${fmt$(additionsRecurringExtras)}</span> extras</div>`
+        : '';
+      const anyAdds = newRow || extrasRow;
+      const addsBlock = anyAdds
+        ? `${newRow}${extrasRow}`
+        : `<div><span class="txt-muted">no additions</span></div>`;
       return `<div style="line-height:1.6">
-        <div>${addedLine(additionsRecurring)}</div>
-        ${breakdownRow}
+        ${addsBlock}
         <div>${lostRow}</div>
         <div>${cancelRow}</div>
         ${nowLine(currentRecurring)}
