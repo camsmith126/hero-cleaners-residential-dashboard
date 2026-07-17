@@ -1335,13 +1335,23 @@ select option { text-align: left; }
       bumpCurrent(j.customer_id, c ? c.display_name : (j.customer_name || '?'), j.revenue || 0, isFirst);
     }
 
-    // "Existing recurring" — customer either grandfathered OR with a prior
-    // completed recurring visit. Used to route their extras vs. skips.
+    // "Existing recurring" — customer either grandfathered OR converted
+    // before this month started. Two signals for "converted before month":
+    //   1. first_rec_visit < month_start (ordinal 2nd-visit rule)
+    //   2. became_recurring_at < month_start (classifier's conversion date)
+    // Nate Richards is the canonical case for signal 2: he converted 6/30
+    // (all future weeklies created 6/29 5:46 PM Mountain), but his first_rec_visit
+    // under the ordinal rule is 7/6 (his 2nd chronological visit). Without
+    // the became_recurring_at fallback he'd be double-counted — once in the
+    // frozen baseline (his June-created July visits) and again in "+ new recurring".
     const isExistingRecurring = c => {
       if (!c) return false;
       if (c.established) return true;
-      return !!(c.is_recurring && c.first_rec_visit
-                && c.first_rec_visit.slice(0, 10) < monthStartIso);
+      if (c.is_recurring && c.first_rec_visit
+          && c.first_rec_visit.slice(0, 10) < monthStartIso) return true;
+      if (c.is_recurring && c.became_recurring_at
+          && c.became_recurring_at.slice(0, 10) < monthStartIso) return true;
+      return false;
     };
     const isNewRecurringThisMonth = c => {
       return !!(c && c.is_recurring && !isExistingRecurring(c));
