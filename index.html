@@ -1418,9 +1418,21 @@ select option { text-align: left; }
         // Sarah Liston 7/15 first clean ($229) → one-off new. 7/29 Bi-Weekly
         // ($175) → new recurring. Nate Richards' first clean was in June so
         // none of his July visits get carved out — they're all new recurring.
+        //
+        // 2026-07-17 refinement: subtract baseline from the first-visit
+        // amount before adding to `additionsOneOffNew`. When a customer's
+        // Intro was already on the July 1 calendar (Megan Keay, Elle Lunt),
+        // baseline_nonrec already claims that revenue. Adding it again to
+        // "+ new customer" double-counted. Now:
+        //   - Sarah (no baseline): first_amt $229 - $0 = $229 → new customer
+        //   - Megan (baseline $239): $239 - $239 = $0 → nothing added
+        //   - Elle (baseline $480, actual $420): $420 - $480 = -$60 → cancellations
         const firstAmt = (curInfo && curInfo.firstVisitDollars) || 0;
         const restAmt = actual - firstAmt;
-        if (firstAmt > 0) additionsOneOffNew += firstAmt;
+        const blOneOff = (blInfo && blInfo.baseline) || 0;
+        const netFirst = firstAmt - blOneOff;
+        if (netFirst > 0) additionsOneOffNew += netFirst;
+        else if (netFirst < -0.005) lossesNonRecurring += -netFirst;
         if (restAmt > 0) additionsRecurringNew += restAmt;
       } else if (blInfo && blInfo.hasRecurring) {
         // Was a recurring customer at month start, now not (Dawn/Maggie/Hydee)
