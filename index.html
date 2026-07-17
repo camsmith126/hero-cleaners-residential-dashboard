@@ -508,9 +508,9 @@ select option { text-align: left; }
       </p>
       <div id="allNewJobsFeed" class="new-jobs-feed"></div>
 
-      <h3 style="margin:18px 0 4px 0">First Recurring Cleans <span style="color:var(--purple)">★</span> <span class="txt-muted" style="font-weight:400;font-size:12px" id="firstRecurringCount"></span></h3>
+      <h3 style="margin:18px 0 4px 0">First Recurring Cleans — <span id="firstRecurringMonth"></span> <span style="color:var(--purple)">★</span> <span class="txt-muted" style="font-weight:400;font-size:12px" id="firstRecurringCount"></span></h3>
       <p class="txt-muted" style="margin:0 0 8px 0;font-size:11px">
-        A customer just booked recurring — this is their first-ever visit at recurring cadence. Top priority: nailing this clean is what makes the recurring stick.
+        Every customer whose first-ever recurring visit falls in this month — completed and upcoming. Top priority: nailing this clean is what makes the recurring stick.
       </p>
       <div id="firstRecurringFeed" class="new-jobs-feed"></div>
     </div>
@@ -1840,6 +1840,18 @@ select option { text-align: left; }
       return false;
     };
 
+    // Month bounds (for the First Recurring Cleans feed which shows the
+    // whole month, unlike the All New Jobs feed which is week-scoped).
+    const monthYM = TODAY.slice(0, 7);
+    const monthStart = monthYM + '-01';
+    const monthEndDate = new Date(Date.UTC(
+      parseInt(monthYM.split('-')[0], 10),
+      parseInt(monthYM.split('-')[1], 10),
+      0
+    ));
+    const monthEnd = monthEndDate.toISOString().slice(0, 10);
+
+    // All New Jobs feed — still weekly.
     const completed = (SNAPSHOT.completed_recent || [])
       .filter(j => j.date >= monIso && j.date <= sunIso && isFreshCustomer(j.customer_id))
       .map(j => ({ ...j, _status: 'completed' }));
@@ -1850,28 +1862,70 @@ select option { text-align: left; }
     // De-dupe: if a customer's job appears in BOTH (rare race between sources),
     // prefer the completed version.
     const seen = new Set();
-    const all = [];
+    const weekJobs = [];
     for (const j of [...completed, ...upcoming]) {
       const k = `${j.customer_id}|${j.date}`;
       if (seen.has(k)) continue;
       seen.add(k);
-      all.push(j);
+      weekJobs.push(j);
     }
-    all.sort((a, b) => a.date.localeCompare(b.date) || (a._status === 'completed' ? -1 : 1));
+    weekJobs.sort((a, b) => a.date.localeCompare(b.date) || (a._status === 'completed' ? -1 : 1));
 
-    // Bucket into the two feeds. First-recurring rows live in their own
-    // feed regardless of completion status; everything else goes to the
-    // standard "All New Jobs" feed.
-    const firstRecRows = [];
-    const otherRows    = [];
-    for (const j of all) {
+    // All New Jobs feed = weekJobs minus anything already claimed by the
+    // First Recurring feed (if a customer's first_rec_visit happens to fall
+    // in the current week, we don't want to double-count them).
+    const otherRows = weekJobs.filter(j => {
       const c = byId[j.customer_id] || {};
-      if (isFirstRecurringJob(j, c)) firstRecRows.push(j);
-      else                            otherRows.push(j);
+      return !isFirstRecurringJob(j, c);
+    });
+
+    // First Recurring Cleans feed — whole-month view driven by customers
+    // whose first_rec_visit is in this month. One row per qualifying
+    // customer; look up the actual job for cleaners/revenue/job_type.
+    const jobKey = j => `${j.customer_id}|${j.date}`;
+    const jobIndex = {};
+    for (const j of (SNAPSHOT.completed_recent || [])) {
+      jobIndex[jobKey(j)] = { ...j, _status: 'completed' };
+    }
+    // upcoming_jobs is the full month-ahead scheduled list; week_jobs is
+    // just a subset. Prefer upcoming_jobs when present.
+    for (const j of (SNAPSHOT.upcoming_jobs || SNAPSHOT.week_jobs || [])) {
+      const k = jobKey(j);
+      if (!jobIndex[k]) jobIndex[k] = { ...j, _status: 'upcoming' };
     }
 
+    const firstRecRows = [];
+    for (const c of customers) {
+      if (isEstablished(c.customer_id)) continue;
+      if (!c.first_rec_visit) continue;
+      if (c.first_rec_visit < monthStart || c.first_rec_visit > monthEnd) continue;
+      const k = `${c.customer_id}|${c.first_rec_visit}`;
+      let job = jobIndex[k];
+      if (!job) {
+        // Fabricate a minimal row when the job hasn't materialized in either
+        // feed yet (rare — happens if the pipeline populated first_rec_visit
+        // via ordinal rule from HCP future job but the future job list is
+        // truncated). Falls back to customer.rate for the amount display.
+        job = {
+          customer_id: c.customer_id,
+          date: c.first_rec_visit,
+          display_name: c.display_name,
+          job_type: c.frequency ? `${c.frequency} Cleaning` : null,
+          rate: c.rate,
+          revenue: null,
+          cleaners: '',
+          _status: c.first_rec_visit <= TODAY ? 'completed' : 'upcoming',
+        };
+      }
+      firstRecRows.push(job);
+    }
+    firstRecRows.sort((a, b) => a.date.localeCompare(b.date));
+
+    document.getElementById('firstRecurringMonth').textContent = MONTH_NAMES[
+      parseInt(monthYM.split('-')[1], 10) - 1
+    ];
     document.getElementById('newJobsCount').textContent =
-      all.length ? `(${all.length})` : '';
+      weekJobs.length ? `(${weekJobs.length})` : '';
     document.getElementById('allNewJobsCount').textContent =
       otherRows.length ? `(${otherRows.length})` : '';
     document.getElementById('firstRecurringCount').textContent =
@@ -1931,7 +1985,7 @@ select option { text-align: left; }
       : '<div class="txt-muted" style="padding:6px 2px">No new-customer jobs on the calendar this week.</div>';
     firstFeed.innerHTML = firstRecRows.length
       ? firstRecRows.map(j => renderRow(j, { firstRec: true })).join('')
-      : '<div class="txt-muted" style="padding:6px 2px">No first-recurring visits scheduled this week.</div>';
+      : '<div class="txt-muted" style="padding:6px 2px">No first-recurring visits scheduled this month.</div>';
   }
 
   // ----- Phase 1 commercial sidecar ----------------------------------------
