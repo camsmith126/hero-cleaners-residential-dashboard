@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <!-- 2026-07-18: build ID + cache-control. Freshness watchdog at bottom
        polls for a newer build every 60s and offers a one-click reload. -->
-  <meta name="hc-build-id" content="20260722T060027">
+  <meta name="hc-build-id" content="20260722T104057">
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate, max-age=0">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
@@ -503,14 +503,14 @@ select option { text-align: left; }
     </div>
 
     <div class="card" id="newJobsCard">
-      <h2>New Jobs This Week <span class="txt-muted" id="newJobsCount"></span></h2>
+      <h2>New Jobs This Month <span class="txt-muted" id="newJobsCount"></span></h2>
       <p class="txt-muted" style="margin:-4px 0 12px 0;font-size:12px">
-        Visits this week for customers who aren't yet on the steady-state recurring roster. Split below into the standard new-customer book and the first-recurring milestones. Rows turn green ✓ as the visits complete.
+        Visits this month for customers who aren't yet on the steady-state recurring roster. Split below into the standard new-customer book and the first-recurring milestones. Rows turn green ✓ as the visits complete.
       </p>
 
       <h3 style="margin:6px 0 8px 0">All New Jobs <span class="txt-muted" style="font-weight:400;font-size:12px" id="allNewJobsCount"></span></h3>
       <p class="txt-muted" style="margin:0 0 8px 0;font-size:11px">
-        First-time cleans (Intro / Deep / Move-In / Move-Out) and returning past customers. These need to feel great so they want a recurring spot.
+        First-time cleans (Intro / Deep / Move-In / Move-Out) and returning past customers for the full month. These need to feel great so they want a recurring spot.
       </p>
       <div id="allNewJobsFeed" class="new-jobs-feed"></div>
 
@@ -1846,6 +1846,21 @@ select option { text-align: left; }
     // from merged overrides — HCP cus_id + name:: key both). Fall back to the
     // override map for anything the pipeline didn't tag (e.g. still-loading).
     const isEstablished = cid => !!(byId[cid] && byId[cid].established) || !!ovs[cid + ':established'];
+
+    // Month bounds — used by both feeds now (2026-07-21 Cam widened All
+    // New Jobs from week → month to match First Recurring Cleans).
+    const monthYM = TODAY.slice(0, 7);
+    const monthStart = monthYM + '-01';
+    const monthEndDate = new Date(Date.UTC(
+      parseInt(monthYM.split('-')[0], 10),
+      parseInt(monthYM.split('-')[1], 10),
+      0
+    ));
+    const monthEnd = monthEndDate.toISOString().slice(0, 10);
+
+    // 2026-07-21 (Cam): "All New Jobs" widened from week to whole month.
+    // Any customer whose first-visit / first-rec-visit falls anywhere in
+    // the current month qualifies.
     const isFreshCustomer = cid => {
       if (isEstablished(cid)) return false;
       const c = byId[cid];
@@ -1856,13 +1871,13 @@ select option { text-align: left; }
       // Brand New, one-off only, returning past customers — the standard
       // "outside the steady-state roster" cases.
       if (c.state === 'Brand New' || !c.is_recurring) return true;
-      // Customer's first-ever visit is this week — brand-new customer
+      // Customer's first-ever visit is this MONTH — brand-new customer
       // whether they booked recurring or not.
-      if (c.first_visit && c.first_visit >= monIso && c.first_visit <= sunIso) return true;
+      if (c.first_visit && c.first_visit >= monthStart && c.first_visit <= monthEnd) return true;
       // On the roster but hasn't had their first recurring visit yet,
-      // OR the recorded first recurring visit is this week (milestone).
+      // OR the recorded first recurring visit is this MONTH (milestone).
       if (c.is_recurring && !c.first_rec_visit) return true;
-      if (c.is_recurring && c.first_rec_visit && c.first_rec_visit >= monIso && c.first_rec_visit <= sunIso) return true;
+      if (c.is_recurring && c.first_rec_visit && c.first_rec_visit >= monthStart && c.first_rec_visit <= monthEnd) return true;
       return false;
     };
     // A job is "first-ever recurring" under Cam's ordinal rule: the customer's
@@ -1877,23 +1892,14 @@ select option { text-align: left; }
       return false;
     };
 
-    // Month bounds (for the First Recurring Cleans feed which shows the
-    // whole month, unlike the All New Jobs feed which is week-scoped).
-    const monthYM = TODAY.slice(0, 7);
-    const monthStart = monthYM + '-01';
-    const monthEndDate = new Date(Date.UTC(
-      parseInt(monthYM.split('-')[0], 10),
-      parseInt(monthYM.split('-')[1], 10),
-      0
-    ));
-    const monthEnd = monthEndDate.toISOString().slice(0, 10);
-
-    // All New Jobs feed — still weekly.
+    // All New Jobs feed — full month. `upcoming_jobs` is the month-ahead
+    // scheduled list; `week_jobs` is a stale week-only subset, so we
+    // prefer upcoming_jobs when the pipeline populated it.
     const completed = (SNAPSHOT.completed_recent || [])
-      .filter(j => j.date >= monIso && j.date <= sunIso && isFreshCustomer(j.customer_id))
+      .filter(j => j.date >= monthStart && j.date <= monthEnd && isFreshCustomer(j.customer_id))
       .map(j => ({ ...j, _status: 'completed' }));
-    const upcoming = (SNAPSHOT.week_jobs || [])
-      .filter(j => j.date >= monIso && j.date <= sunIso && isFreshCustomer(j.customer_id))
+    const upcoming = (SNAPSHOT.upcoming_jobs || SNAPSHOT.week_jobs || [])
+      .filter(j => j.date >= monthStart && j.date <= monthEnd && isFreshCustomer(j.customer_id))
       .map(j => ({ ...j, _status: 'upcoming' }));
 
     // De-dupe: if a customer's job appears in BOTH (rare race between sources),
