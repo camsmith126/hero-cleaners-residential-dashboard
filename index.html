@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <!-- 2026-07-18: build ID + cache-control. Freshness watchdog at bottom
        polls for a newer build every 60s and offers a one-click reload. -->
-  <meta name="hc-build-id" content="20260722T134545">
+  <meta name="hc-build-id" content="20260722T140053">
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate, max-age=0">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
@@ -1887,18 +1887,12 @@ select option { text-align: left; }
           || s.indexOf('maintenance') >= 0
           || s.indexOf('every ') >= 0;   // matches "Every 2 Weeks"
     };
-    const hadRecentPriorVisit = j => {
-      const cid = j.customer_id;
-      const jobIso = j.date;
-      const cutoff = new Date(jobIso + 'T00:00:00Z');
-      cutoff.setUTCDate(cutoff.getUTCDate() - 45);
-      const cutoffIso = cutoff.toISOString().slice(0, 10);
-      return (SNAPSHOT.completed_recent || []).some(other =>
-        other.customer_id === cid
-        && other.date < jobIso
-        && other.date >= cutoffIso
-      );
-    };
+    // States that mean "plan is still trending, cadence just slipped" —
+    // classifier-nuanced but they still count as recurring revenue.
+    // completed_recent only holds ~30 days of history so a back-scan
+    // approach falsely surfaces Monthly cadence customers as new when
+    // their prior clean predates the visible window; state is authoritative.
+    const midCadenceStates = new Set(['Overdue', 'At Risk', 'Paused']);
     const isNewJob = j => {
       const c = byId[j.customer_id];
       if (!c) return false;
@@ -1909,15 +1903,19 @@ select option { text-align: left; }
       if (!recurringStyle) return true;
 
       // Recurring-style job_type on an actively-recurring customer: this is
-      // recurring revenue unless it\'s a pre-plan clean.
+      // recurring revenue unless it\'s a pre-plan clean (Intro/Deep before
+      // signing up).
       if (c.is_recurring) {
         if (c.first_rec_visit && j.date < c.first_rec_visit) return true;
         return false;
       }
-      // Recurring-style job_type on a NOT-currently-recurring customer:
-      //   - Continuous cadence (Hydee/Dawn overdue): recent prior → hide
-      //   - Returning after gap (Ryan): no recent prior → surface as new
-      return !hadRecentPriorVisit(j);
+      // Recurring-style job_type + not currently recurring. Discriminate via
+      // state:
+      //   - Overdue / At Risk / Paused → cadence still trending, treat as
+      //     recurring revenue (Hydee, Dawn)
+      //   - Lost / other → truly a fresh booking after churn (Ryan) → new
+      if (midCadenceStates.has(c.state)) return false;
+      return true;
     };
 
     // A job is "first-ever recurring" under Cam\'s ordinal rule: the customer\'s
