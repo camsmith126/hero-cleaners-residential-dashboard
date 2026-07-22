@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <!-- 2026-07-18: build ID + cache-control. Freshness watchdog at bottom
        polls for a newer build every 60s and offers a one-click reload. -->
-  <meta name="hc-build-id" content="20260722T132719">
+  <meta name="hc-build-id" content="20260722T134545">
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate, max-age=0">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
@@ -1858,28 +1858,66 @@ select option { text-align: left; }
     ));
     const monthEnd = monthEndDate.toISOString().slice(0, 10);
 
-    // 2026-07-22 (Cam): tightened the per-job filter. Rule is now
-    // "any clean that is NOT part of a recurring cleaning plan". A
-    // recurring clean = customer.is_recurring AND job.date >= first_rec_visit.
-    // Everything else is a new job:
-    //   - Non-recurring customer's cleans (one-off, Brand New, Intro/Deep/
-    //     Move-In etc.) — all their cleans in this month qualify.
-    //   - Recurring customer's cleans BEFORE their first_rec_visit — e.g.
-    //     the Intro/Deep clean they had before signing up for a plan.
-    //   - Their first_rec_visit itself goes to the "First Recurring Cleans"
-    //     sub-feed (milestone). Subsequent recurring visits are recurring
-    //     revenue and don\'t show anywhere on this card.
+    // 2026-07-22 (Cam, refined): "New Jobs This Month" should show
+    //   - New customers who booked cleans (Intro/Deep/Move-in/Custom etc.)
+    //   - Current or former customers booking a fresh one-off after a gap
+    //     (returning-past-customer flow — think Ryan)
+    // and NOT show
+    //   - Continuous recurring cadence for a customer whose is_recurring
+    //     flipped false (classifier lag on Overdue → Lost transition)
+    //     — think Hydee, Dawn
+    //   - Any post-plan recurring visits for a currently-on-plan customer
+    //
+    // Two-signal rule:
+    //   1. Job type. If the label is one-off-style (Intro, Deep, Move-in,
+    //      Custom etc.) → always a new job. These never happen mid-plan.
+    //   2. Recurring-style job_type (Weekly/Bi-Weekly/Monthly/Cleaning Plans/
+    //      Recurring/Maintenance/Every N ...) — only counts as new if the
+    //      customer had no recent prior visit. Recent = within 45 days.
+    //      A weekly cadence that keeps happening (Hydee) has a prior visit
+    //      inside that window; a customer returning after months (Ryan) does
+    //      not.
+    const isRecurringStyleJobType = jt => {
+      if (!jt) return false;
+      const s = String(jt).toLowerCase();
+      return s.indexOf('weekly') >= 0
+          || s.indexOf('monthly') >= 0
+          || s.indexOf('cleaning plan') >= 0
+          || s.indexOf('recurring') >= 0
+          || s.indexOf('maintenance') >= 0
+          || s.indexOf('every ') >= 0;   // matches "Every 2 Weeks"
+    };
+    const hadRecentPriorVisit = j => {
+      const cid = j.customer_id;
+      const jobIso = j.date;
+      const cutoff = new Date(jobIso + 'T00:00:00Z');
+      cutoff.setUTCDate(cutoff.getUTCDate() - 45);
+      const cutoffIso = cutoff.toISOString().slice(0, 10);
+      return (SNAPSHOT.completed_recent || []).some(other =>
+        other.customer_id === cid
+        && other.date < jobIso
+        && other.date >= cutoffIso
+      );
+    };
     const isNewJob = j => {
       const c = byId[j.customer_id];
       if (!c) return false;
       if (isEstablished(j.customer_id)) return false;
-      // Non-recurring customer → every clean is a new job.
-      if (!c.is_recurring) return true;
-      // Recurring customer → only cleans strictly before first_rec_visit
-      // (the plan's start) count as new jobs. first_rec_visit itself and
-      // everything after is recurring revenue.
-      if (c.first_rec_visit && j.date < c.first_rec_visit) return true;
-      return false;
+
+      const recurringStyle = isRecurringStyleJobType(j.job_type);
+      // One-off job_type (Intro/Deep/Move-in/Custom …) always counts as new.
+      if (!recurringStyle) return true;
+
+      // Recurring-style job_type on an actively-recurring customer: this is
+      // recurring revenue unless it\'s a pre-plan clean.
+      if (c.is_recurring) {
+        if (c.first_rec_visit && j.date < c.first_rec_visit) return true;
+        return false;
+      }
+      // Recurring-style job_type on a NOT-currently-recurring customer:
+      //   - Continuous cadence (Hydee/Dawn overdue): recent prior → hide
+      //   - Returning after gap (Ryan): no recent prior → surface as new
+      return !hadRecentPriorVisit(j);
     };
 
     // A job is "first-ever recurring" under Cam\'s ordinal rule: the customer\'s
