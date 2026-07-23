@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <!-- 2026-07-18: build ID + cache-control. Freshness watchdog at bottom
        polls for a newer build every 60s and offers a one-click reload. -->
-  <meta name="hc-build-id" content="20260722T182939">
+  <meta name="hc-build-id" content="20260722T184151">
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate, max-age=0">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
@@ -801,6 +801,27 @@ select option { text-align: left; }
   const LS_KEY_CANCELS     = 'hc:res:v1:cancellations';
   const LS_KEY_CONVERSIONS = 'hc:res:v1:conversion_reasons';
 
+  // ---------------- MRR / visits-per-month averages ----------------
+  // Calendar-based averages (52 weeks / 12 months), not the naive 4-weeks
+  // convention we used to use — which shorted every weekly customer by ~4
+  // visits/year and every bi-weekly by ~2. A weekly customer at $100/visit
+  // is really $433/mo on average, not $400. Every MRR tile on the dashboard
+  // (Ops KPI strip, Net 30d gainedMrr, Customer Book KPIs) reads from this
+  // one table so the numbers agree everywhere.
+  const VISITS_PER_MONTH = Object.freeze({
+    '3x per Week':   52 * 3 / 12,   // 13.00
+    '2x per Week':   52 * 2 / 12,   //  8.67
+    'Weekly':        52 / 12,       //  4.33
+    'Bi-Weekly':     26 / 12,       //  2.17
+    'Every 3 Weeks': 52 / 3 / 12,   //  1.44
+    'Monthly':       1,             //  1.00
+  });
+  const mrrFor = c => {
+    if (!c || !c.rate) return 0;
+    const v = VISITS_PER_MONTH[c.frequency];
+    return v ? c.rate * v : 0;
+  };
+
   // ---------------- shared edit store (Supabase-backed) ----------------
   // Every browser hydrates from Supabase on load and rewrites on each save,
   // so manual edits made by Jaylee on her laptop show up for Cam on his.
@@ -1130,33 +1151,22 @@ select option { text-align: left; }
     // 1. Active Recurring — full roster size (Active + Brand New + Paused, all on roster)
     const activeRecurring = recurringNow.length;
 
-    // 2. Est. MRR — sum across the active roster using the visits-per-month
-    // convention (Weekly = 4, Bi-Weekly = 2, Every 3 Weeks = 4/3, Monthly = 1).
-    // Same formula as the Customer Book and Net-30d tiles, so all MRR numbers
-    // across the dashboard agree.
-    const VPM_OPS = { '3x per Week': 12, '2x per Week': 8, 'Weekly': 4, 'Bi-Weekly': 2, 'Every 3 Weeks': 4 / 3, 'Monthly': 1 };
-    const mrr = recurringNow.reduce((a, c) => {
-      const v = VPM_OPS[c.frequency];
-      return (v && c.rate) ? a + c.rate * v : a;
-    }, 0);
+    // 2. Est. MRR — sum across the active roster using calendar-average
+    // visits-per-month (see VISITS_PER_MONTH at top of script for the
+    // constants). Same formula as the Customer Book and Net-30d tiles, so
+    // all MRR numbers across the dashboard agree.
+    const mrr = recurringNow.reduce((a, c) => a + mrrFor(c), 0);
 
     // 3. Net 30d — Gained minus Lost from the rolling roster-change bucketing.
-    // Echoes the flow tiles in the Recurring Roster Changes section below.
-    // Visits-per-month multipliers (4 weeks/month convention): weekly = 4
-    // visits, bi-weekly = 2, every 3 weeks = 4/3, monthly = 1. Used to roll
-    // up the MRR brought in by gained customers so we see how much net new
-    // recurring revenue the last 30 days added.
-    const VISITS_PER_MONTH = {
-      '3x per Week': 12, '2x per Week': 8, 'Weekly': 4, 'Bi-Weekly': 2, 'Every 3 Weeks': 4 / 3, 'Monthly': 1,
-    };
+    // Also rolls up the MRR the gained customers brought in so we see how
+    // much net new recurring revenue the last 30 days added.
     let g30 = 0, l30 = 0;
     let gainedMrr = 0;
     for (const c of customers) {
       const bs = rollingRosterBuckets(c);
       if (bs.has('gained')) {
         g30++;
-        const v = VISITS_PER_MONTH[c.frequency];
-        if (v && c.rate) gainedMrr += c.rate * v;
+        gainedMrr += mrrFor(c);
       }
       if (bs.has('lost')) l30++;
     }
@@ -3043,10 +3053,8 @@ select option { text-align: left; }
     const recurring = customers.filter(c => c.is_recurring && c.state !== 'Lost');
     const newLocked = recurring.filter(c => c.new_recurring_locked);
 
-    // Visits-per-month multipliers (4 weeks/month convention) — same as the
-    // Operations Net-30d tile, so MRR numbers line up across the dashboard.
-    const VPM = { '3x per Week': 12, '2x per Week': 8, 'Weekly': 4, 'Bi-Weekly': 2, 'Every 3 Weeks': 4 / 3, 'Monthly': 1 };
-    const mrrFor = c => (c.rate || 0) * (VPM[c.frequency] || 0);
+    // Uses the top-level mrrFor helper (calendar-average visits-per-month)
+    // so the Customer Book tile agrees with the Ops KPI strip.
     const mrr = recurring.reduce((a, c) => a + mrrFor(c), 0);
 
     // YTD 2026 roster movement (used for the new tiles + the chart below).
