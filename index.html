@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <!-- 2026-07-18: build ID + cache-control. Freshness watchdog at bottom
        polls for a newer build every 60s and offers a one-click reload. -->
-  <meta name="hc-build-id" content="20260723T181329">
+  <meta name="hc-build-id" content="20260723T181700">
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate, max-age=0">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
@@ -4186,7 +4186,7 @@ select option { text-align: left; }
       { label: 'One-off / new bookings', value: fmt$(mm.opening.one_off),
         sub: 'intro, deep, move-out cleans' },
       { label: 'MRR at month start', value: fmt$(mm.mrr.open),
-        sub: 'derived from this month\\'s movement' },
+        sub: "derived from this month's movement" },
     ]);
 
     // ---- Bridge rows ----
