@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <!-- 2026-07-18: build ID + cache-control. Freshness watchdog at bottom
        polls for a newer build every 60s and offers a one-click reload. -->
-  <meta name="hc-build-id" content="20261013T140530">
+  <meta name="hc-build-id" content="20261013T141745">
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate, max-age=0">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
@@ -1806,7 +1806,10 @@ select option { text-align: left; }
       // recently. Uses last_rec_visit as the leave proxy (or last_visit if
       // they never had a recurring visit recorded). Catches both heavy
       // churners and light churners.
-      const everRec = !!c.first_rec_visit;
+      // 2026-10-13 (Cam): require state === 'Lost'. "Off the roster" alone
+      // also catches a returning past customer who just re-booked (Michelle
+      // Premer: Deep Clean 10/6, Monthly booked 11/30 — Active, not lost).
+      const everRec = !!c.first_rec_visit && c.state === 'Lost';
       if (everRec) {
         const left = c.last_rec_visit || c.last_visit;
         if (left && daysAgo(left) != null && daysAgo(left) <= 30) {
@@ -2576,19 +2579,14 @@ select option { text-align: left; }
     //             within the last 30d.
     //   LOST    = off roster (!is_recurring || Lost), ever had a
     //             first_rec_visit, left within last 30d.
+    // 2026-10-13 (Cam): one definition everywhere. These tiles, the Ops
+    // "Net 30d" KPI and the Lost table below all read rollingRosterBuckets.
     const flowFuture = [], flowGained = [], flowLost = [];
     for (const c of customers) {
-      const onRoster = !!c.is_recurring && c.state !== 'Lost';
-      if (onRoster) {
-        if (!c.first_rec_visit && !c.established) flowFuture.push(c);
-        const anchor = c.became_recurring_at || c.first_rec_visit;
-        const da = daysAgo(anchor);
-        if (da != null && da <= 30) flowGained.push(c);
-      } else if (c.first_rec_visit) {
-        const left = c.last_rec_visit || c.last_visit;
-        const da = daysAgo(left);
-        if (da != null && da <= 30) flowLost.push(c);
-      }
+      const bs = rollingRosterBuckets(c);
+      if (bs.has('future')) flowFuture.push(c);
+      if (bs.has('gained')) flowGained.push(c);
+      if (bs.has('lost'))   flowLost.push(c);
     }
     const netVal = flowGained.length - flowLost.length;
     const netStr = netVal > 0 ? `+${netVal}` : `${netVal}`;
@@ -2613,8 +2611,6 @@ select option { text-align: left; }
       </div>
       <div class="flow-net">Net 30d: <span class="net-value ${netClass}">${netStr}</span></div>`;
 
-    document.getElementById('lostCount').textContent =
-      lostByCustomer.size ? `(${lostByCustomer.size})` : '';
     document.getElementById('gainedCount').textContent =
       flowGained.length ? `(${flowGained.length})` : '';
     document.getElementById('cancelledCount').textContent =
@@ -2636,9 +2632,9 @@ select option { text-align: left; }
       const c = entry.customer;
       const visits = entry.visits.slice().sort((a, b) => a.visit_date.localeCompare(b.visit_date));
       const totalLost = visits.reduce((a, v) => a + (v.rate || 0), 0);
-      const datesTxt = visits
+      const datesTxt = visits.length ? visits
         .map(v => `${fmtDate(v.visit_date)} <span class="txt-muted">${fmt$(v.rate || 0)}</span>`)
-        .join(' · ');
+        .join(' · ') : '<span class="txt-muted">—</span>';
       const cadenceTxt = c.frequency || '—';
       const lastTxt = c.last_rec_visit
         ? `${fmtDate(c.last_rec_visit)} <span class="txt-muted" style="font-size:11px">(${daysAgo(c.last_rec_visit)}d ago)</span>`
@@ -2656,7 +2652,7 @@ select option { text-align: left; }
         <td>${lastTxt}</td>
         <td class="right">${histRec}</td>
         <td>${datesTxt}</td>
-        <td class="right"><strong class="delta-down">−${fmt$(totalLost)}</strong></td>
+        <td class="right">${visits.length ? `<strong class="delta-down">−${fmt$(totalLost)}</strong>` : '<span class="txt-muted">—</span>'}</td>
         <td class="right">${actionCell}</td>
       </tr>`;
     };
@@ -2690,11 +2686,24 @@ select option { text-align: left; }
     });
 
     // ---- Lost table ----
-    if (!lostByCustomer.size) {
+    // 2026-10-13 (Cam): "we need uniformity" — the tile said 4, this said 2.
+    // The table used to list only customers with a missed visit on THIS
+    // MONTH's frozen baseline, so a September churn (Kenzee Willis 9/24) was
+    // in the 30-day tile but not here. Now the table lists exactly the
+    // rolling-30d Lost set (flowLost); baseline misses are shown as detail.
+    const lostEntries = flowLost.map(c => {
+      const bl = lostByCustomer.get(c.customer_id);
+      return { customer: c, visits: bl ? bl.visits : [] };
+    });
+    document.getElementById('lostCount').textContent =
+      lostEntries.length ? `(${lostEntries.length})` : '';
+    if (!lostEntries.length) {
       document.getElementById('lostTableWrap').innerHTML =
-        '<p class="txt-muted" style="margin:0">No customers churned this month.</p>';
+        '<p class="txt-muted" style="margin:0">No customers left the roster in the last 30 days.</p>';
     } else {
-      const entries = sortByRev(Array.from(lostByCustomer.values()));
+      const entries = lostEntries.slice().sort((a, b) =>
+        (b.customer.last_rec_visit || b.customer.last_visit || '')
+          .localeCompare(a.customer.last_rec_visit || a.customer.last_visit || ''));
       const totalLost = entries.reduce(
         (s, e) => s + e.visits.reduce((a, v) => a + (v.rate || 0), 0), 0);
       document.getElementById('lostTableWrap').innerHTML = `
@@ -2704,7 +2713,7 @@ select option { text-align: left; }
             <th>Cadence</th>
             <th>Last Visit</th>
             <th class="right">Hist. rec</th>
-            <th>Missed visits</th>
+            <th>Missed visits this month</th>
             <th class="right">Revenue lost</th>
             <th class="right">Action</th>
           </tr></thead>
